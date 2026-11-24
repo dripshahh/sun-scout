@@ -1,0 +1,17 @@
+{
+  "name": "Sun Scout",
+  "short_name": "Sun Scout",
+  "description": "Sun path, shadows, live clouds and 3D street views for planning outdoor shoots.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0e1014",
+  "theme_color": "#0e1014",
+  "categories": ["photo", "weather", "utilities"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

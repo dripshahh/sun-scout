@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sun Scout</title>
+<meta name="description" content="Sun path, shadows, live clouds and 3D street views for planning outdoor shoots.">
+<meta name="theme-color" content="#0e1014">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Sun Scout">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/suncalc@1.9.0/suncalc.js"></script>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+} }
+</script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <header id="top">
+    <div class="brand">☀️ <b>Sun Scout</b></div>
+    <div class="search">
+      <input id="q" type="text" autocomplete="off" placeholder="Type a building, place or address… (e.g. Trident Nariman Point)">
+      <button id="go">Go</button>
+      <button id="locate" title="Use my location" aria-label="Use my location">📍</button>
+      <div id="sugs" class="sugs hidden"></div>
+    </div>
+    <div class="tabs" role="tablist">
+      <button class="tab on" data-view="map">🗺️ Map</button>
+      <button class="tab" data-view="orbit">🏙️ 3D</button>
+      <button class="tab" data-view="street">🚶 Street</button>
+    </div>
+  </header>
+
+  <main id="stage">
+    <div id="map" class="view"></div>
+    <div id="scene" class="view hidden"></div>
+
+    <div id="editPanel" class="edit hidden">
+      <div class="row between"><b id="editTitle">This building</b><button id="editClose" class="link" title="Close">✕</button></div>
+      <div id="editNote" class="note"></div>
+      <div class="kinds">
+        <button data-k="building">🏢 Building</button>
+        <button data-k="temple">🛕 Temple</button>
+        <button data-k="dome">🕌 Dome</button>
+        <button data-k="church">⛪ Church</button>
+        <button data-k="low">🏠 Low (1–2 floors)</button>
+        <button data-k="removed">🌳 Open ground</button>
+      </div>
+      <div class="row hrow"><span class="k">Height</span><input id="editH" type="range" min="3" max="320" step="1"><span id="editHv" class="v">–</span></div>
+      <button id="editReset" class="link">↺ Undo my changes to this one</button>
+    </div>
+
+    <div id="mapTools" class="floating">
+      <button id="cloudBtn" class="pill">🛰️ Live clouds</button>
+      <button id="radarBtn" class="pill">🌧️ Rain radar</button>
+      <div id="cloudBar" class="hidden">
+        <button id="cloudPlay" class="pill small">⏸</button>
+        <span id="cloudTime">–</span>
+      </div>
+    </div>
+
+    <div id="sceneTools" class="floating hidden">
+      <button id="bestView" class="pill small hero">🎯 Best view</button>
+      <div class="lens">
+        <span class="lbl">Lens</span>
+        <button data-mm="16">16</button><button data-mm="24">24</button><button data-mm="35" class="on">35</button><button data-mm="50">50</button><button data-mm="85">85</button>
+      </div>
+      <button id="faceSun" class="pill small">🔆 Face the sun</button>
+      <button id="sunBehind" class="pill small">🙂 Sun behind me</button>
+      <button id="wxBtn" class="pill small on">☁️ Forecast clouds: on</button>
+      <button id="treeBtn" class="pill small on">🌳 Trees: on</button>
+      <button id="snap" class="pill small">📸 Snapshot</button>
+    </div>
+    <div id="sceneHint" class="hint hidden"></div>
+    <div id="pad" class="hidden">
+      <button data-mv="f">▲</button>
+      <div><button data-mv="l">◀</button><button data-mv="b">▼</button><button data-mv="r">▶</button></div>
+    </div>
+    <div id="sceneStatus" class="status hidden"></div>
+  </main>
+
+  <aside id="side">
+    <div id="installBar" class="install hidden">
+      <div><b>📲 Put Sun Scout on your home screen</b><div id="installHow" class="note"></div></div>
+      <div class="row"><button id="installBtn" class="pill small hero hidden">Install</button><button id="installClose" class="link">Not now</button></div>
+    </div>
+    <div id="place" class="place">📍 Gateway of India, Mumbai</div>
+
+    <div id="score" class="score"><div class="emoji">☀️</div><div><div class="title">–</div><div class="sub">–</div></div></div>
+
+    <div class="card">
+      <div class="row between"><h2>🛰️ Right now, from space</h2><button id="liveRefresh" class="link">refresh</button></div>
+      <div id="liveSky" class="live">Checking the latest satellite image…</div>
+    </div>
+
+    <div class="card">
+      <h2>☀️ Sun at <span id="tLabel2">–</span></h2>
+      <div class="grid">
+        <div><div class="k">Direction</div><div class="v" id="az">–</div></div>
+        <div><div class="k">Height</div><div class="v" id="alt">–</div></div>
+        <div><div class="k">Shadows</div><div class="v" id="shadow">–</div></div>
+        <div><div class="k">Light</div><div class="v" id="quality">–</div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>⏰ Today's light</h2>
+      <div id="dayBar" class="daybar"></div>
+      <div class="grid">
+        <div><div class="k">🌅 Sunrise</div><div class="v" id="rise">–</div></div>
+        <div><div class="k">🌇 Sunset</div><div class="v" id="set">–</div></div>
+        <div><div class="k">✨ Golden AM</div><div class="v" id="goldAM">–</div></div>
+        <div><div class="k">✨ Golden PM</div><div class="v" id="goldPM">–</div></div>
+        <div><div class="k">💙 Blue AM</div><div class="v" id="blueAM">–</div></div>
+        <div><div class="k">💙 Blue PM</div><div class="v" id="bluePM">–</div></div>
+      </div>
+      <div id="hills" class="hills note">⛰️ Checking hills around you…</div>
+    </div>
+
+    <div class="card">
+      <h2>🌤️ Hour-by-hour forecast</h2>
+      <div id="wxNow" class="note">Loading…</div>
+      <div id="hours"></div>
+      <div class="hl"><span>12am</span><span>6am</span><span>12pm</span><span>6pm</span><span>11pm</span></div>
+      <div class="legend"><i style="background:var(--good)"></i>Sunny <i style="background:var(--mid)"></i>Some cloud <i style="background:var(--grey)"></i>Overcast <i style="background:var(--blue)"></i>Rain</div>
+    </div>
+
+    <details class="card">
+      <summary><h2>🧱 Will sun hit my wall?</h2></summary>
+      <div class="note">Which way does the wall face? (drag)</div>
+      <div class="row"><input id="facade" type="range" min="0" max="359" value="90"><span class="v" id="facadeLbl">90° E</span></div>
+      <div id="facadeInfo" class="note"></div>
+    </details>
+
+    <div class="card">
+      <h2>🛠️ Your building fixes</h2>
+      <div id="fixCount" class="note">No fixes yet. In 3D, click any building to correct it.</div>
+      <div class="row" style="margin-top:8px">
+        <button id="fixExport" class="pill small">💾 Save to file</button>
+        <label class="pill small" style="cursor:pointer">📂 Load file<input id="fixImport" type="file" accept=".json,application/json" hidden></label>
+      </div>
+      <div class="note" style="margin-top:6px">Share the file with your crew so everyone sees the same corrected street.</div>
+    </div>
+
+    <div class="credits">Sun math: SunCalc · Forecast: Open-Meteo · Live clouds: EUMETSAT Meteosat (Indian Ocean) · Radar: RainViewer · Buildings: © OpenStreetMap via OpenFreeMap · Imagery: Esri · Elevation: AWS Terrain Tiles (Mapzen) · Trees: detected from imagery</div>
+  </aside>
+
+  <footer id="timebar">
+    <button id="play" class="playbtn" title="Play the day">▶</button>
+    <div class="timewrap">
+      <div class="timehead">
+        <input id="date" type="date">
+        <span id="tLabel" class="bigtime">--:--</span>
+        <div id="chips" class="chips"></div>
+      </div>
+      <div class="sliderwrap">
+        <div id="sliderBg" class="sliderbg"></div>
+        <input id="t" type="range" min="0" max="1439" step="1">
+      </div>
+    </div>
+  </footer>
+</div>
+<script type="module" src="app.js"></script>
+</body>
+</html>
