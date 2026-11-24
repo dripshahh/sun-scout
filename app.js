@@ -76,7 +76,28 @@ function drawSunOnMap() {
   L.circleMarker(center, { radius: 6, color: '#fff', fillColor: '#e5604d', fillOpacity: 1, weight: 2 }).addTo(sunLayer);
 }
 map.on('zoomend moveend resize', drawSunOnMap);
-map.on('click', e => setLocation(e.latlng.lat, e.latlng.lng, null));
+map.on('click', e => {
+  const { lat, lng } = e.latlng;
+  if (state.pendingName) {
+    const name = state.pendingName; endPickMode();
+    savePlace(name, lat, lng, 'Picked on the map');
+    setLocation(lat, lng, name);
+    $('place').textContent = `⭐ Saved “${name}”. It will come up in search from now on.`;
+    setTimeout(() => { $('place').textContent = '📍 ' + name; }, 5000);
+    return;
+  }
+  setLocation(lat, lng, null);
+});
+function startPickMode(name, nearArea) {
+  name = (name || '').trim().slice(0, 80); if (!name) return;
+  hideSugs(); $('q').blur();
+  state.pendingName = name;
+  if (state.view !== 'map') switchView('map');
+  if (!nearArea && map.getZoom() < 15) map.setZoom(16);
+  $('pickText').textContent = nearArea ? `This is the area. Tap the exact spot of “${name}” to save it.` : `Move the map to “${name}” and tap its exact spot. Sun Scout will remember it.`;
+  $('pickBar').classList.remove('hidden');
+}
+function endPickMode() { state.pendingName = null; $('pickBar').classList.add('hidden'); }
 
 // ───────────────────────── live satellite clouds (EUMETSAT Meteosat Indian Ocean, every 15 min) ─────────────────────────
 const EUM = 'https://view.eumetsat.int/geoserver/wms';
@@ -193,10 +214,73 @@ async function loadWeather() {
     if (j.error) throw new Error(j.reason);
     const changed = state.offset !== j.utc_offset_seconds;
     state.weather = j; state.offset = j.utc_offset_seconds;
+    loadModels();
     if (changed) setNow();
   } catch (e) { state.weather = null; $('wxNow').textContent = 'Forecast unavailable: ' + e.message; }
   update();
 }
+// ── forecast confidence: compare three independent weather models for the same spot ──
+const MODELS = [['ecmwf_ifs025', 'ECMWF (Europe)'], ['gfs_seamless', 'GFS (USA)'], ['icon_seamless', 'ICON (Germany)']];
+const CAT = { sun: '☀️ sunny', mixed: '⛅ some cloud', cloud: '☁️ overcast', rain: '🌧️ rain' };
+let modelSeq = 0;
+async function loadModels() {
+  const my = ++modelSeq; state.models = null;
+  try {
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${state.lat.toFixed(4)}&longitude=${state.lng.toFixed(4)}&hourly=cloud_cover,cloud_cover_low,precipitation&models=${MODELS.map(m => m[0]).join(',')}&timezone=auto&forecast_days=16`;
+    const j = await fetch(url).then(r => r.json());
+    if (j.error || my !== modelSeq) return;
+    state.models = j; update();
+  } catch (e) { /* confidence is a bonus: the main forecast still works */ }
+}
+function modelsAt(dayStr, hour) {
+  const m = state.models; if (!m) return [];
+  const i = m.hourly.time.indexOf(`${dayStr}T${pad2(hour)}:00`); if (i < 0) return [];
+  const out = [];
+  for (const [id, name] of MODELS) {
+    const cc = m.hourly[`cloud_cover_${id}`]?.[i], low = m.hourly[`cloud_cover_low_${id}`]?.[i], pr = m.hourly[`precipitation_${id}`]?.[i];
+    if (cc == null || low == null) continue;
+    out.push({ name, cat: (pr ?? 0) > 0.3 ? 'rain' : (low < 25 && cc < 45) ? 'sun' : low < 60 ? 'mixed' : 'cloud' });
+  }
+  return out;
+}
+function confidenceAt(dayStr, hour) {
+  const ms = modelsAt(dayStr, hour); if (!ms.length) return null;
+  const count = {}; ms.forEach(m => count[m.cat] = (count[m.cat] || 0) + 1);
+  const [cat, n] = Object.entries(count).sort((a, b) => b[1] - a[1])[0];
+  return { cat, agree: n, total: ms.length, odd: ms.filter(m => m.cat !== cat) };
+}
+function renderConfidence(t) {
+  const bar = $('confBar'); bar.innerHTML = '';
+  if (!state.models) { $('confNow').textContent = state.weather ? 'Comparing weather models…' : ''; $('bestWindow').textContent = ''; return null; }
+  const sel = Math.floor(state.minutes / 60);
+  for (let h = 0; h < 24; h++) {
+    const c = confidenceAt(state.date, h), el = document.createElement('div');
+    if (c) { el.className = c.agree === c.total && c.total > 1 ? 'c3' : c.agree >= 2 ? 'c2' : 'c1'; el.title = `${fmtMin(h * 60)}: ${c.agree} of ${c.total} say ${CAT[c.cat]}`; }
+    if (h === sel) el.classList.add('now');
+    el.onclick = () => { stopPlay(); state.minutes = h * 60 + 30; $('t').value = state.minutes; update(); };
+    bar.appendChild(el);
+  }
+  const c = confidenceAt(state.date, sel);
+  if (!c) { $('confNow').textContent = 'Model comparison isn\'t available this far ahead.'; }
+  else if (c.agree === c.total && c.total > 1) $('confNow').innerHTML = `<b>${fmtMin(sel * 60)}</b> · ✅ All ${c.total} forecasts agree: <b>${CAT[c.cat]}</b>. High confidence.`;
+  else if (c.agree >= 2) $('confNow').innerHTML = `<b>${fmtMin(sel * 60)}</b> · 🟡 ${c.agree} of ${c.total} forecasts say <b>${CAT[c.cat]}</b> (${c.odd.map(o => `${o.name}: ${CAT[o.cat]}`).join(', ')}). Fairly likely.`;
+  else $('confNow').innerHTML = `<b>${fmtMin(sel * 60)}</b> · ❓ Forecasts disagree (${modelsAt(state.date, sel).map(o => CAT[o.cat]).join(' / ')}). Keep a backup plan.`;
+
+  // most reliable sunny stretch of daylight today
+  const runs = []; let cur = null;
+  for (let h = 0; h < 24; h++) {
+    const mid = new Date(dayStartUTC() + (h * 60 + 30) * 60000), up = mid > t.sunrise && mid < t.sunset;
+    const k = confidenceAt(state.date, h), level = !up || !k || k.cat !== 'sun' ? 0 : k.agree === k.total ? 2 : k.agree >= 2 ? 1 : 0;
+    if (level && cur && cur.level === level) cur.end = h; else { if (cur) runs.push(cur); cur = level ? { start: h, end: h, level } : null; }
+  }
+  if (cur) runs.push(cur);
+  const best = runs.filter(r => r.level === 2).sort((a, b) => (b.end - b.start) - (a.end - a.start))[0] || runs.sort((a, b) => (b.end - b.start) - (a.end - a.start))[0];
+  $('bestWindow').innerHTML = best
+    ? `☀️ <b>Most reliable sun ${(() => { const p = localParts(new Date()); return state.date === `${p.y}-${pad2(p.m + 1)}-${pad2(p.d)}` ? 'today' : 'on ' + new Date(state.date + 'T12:00:00Z').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' }); })()}: ${fmtMin(best.start * 60)}–${fmtMin((best.end + 1) * 60)}</b>${best.level === 2 ? ' (all forecasts agree)' : ' (2 of 3 forecasts agree)'}`
+    : '☁️ <b>No clearly sunny stretch this day.</b> Expect soft or cloudy light, or check again closer to the date.';
+  return c;
+}
+
 function wxAt(dayStr, hour) {
   const w = state.weather; if (!w) return null;
   const i = w.hourly.time.indexOf(`${dayStr}T${pad2(hour)}:00`); if (i < 0) return null;
@@ -275,9 +359,11 @@ function update() {
 
   const blocked = sunBlocked(d);
   const [emoji, title, sub, bg] = score(a, x, blocked);
+  const conf = renderConfidence(t);
+  const confNote = !conf || a < 0 ? '' : conf.agree === conf.total && conf.total > 1 ? ' ✅ All forecasts agree.' : conf.agree >= 2 ? ` 🟡 ${conf.agree} of ${conf.total} forecasts agree.` : ' ❓ Forecasts disagree, so keep a backup.';
   $('score').querySelector('.emoji').textContent = emoji;
   $('score').querySelector('.title').textContent = title;
-  $('score').querySelector('.sub').textContent = sub;
+  $('score').querySelector('.sub').textContent = sub + confNote;
   $('score').style.background = `linear-gradient(135deg, ${bg}, #1d212b)`;
 
   // facade
@@ -314,14 +400,57 @@ function setLocation(lat, lng, label, keepHint) {
 //    India first, then nearby, then the rest of the world. Also accepts "lat, lng" and Google Maps links.
 const enc = encodeURIComponent;
 const typeIcon = t => ({ hotel: '🏨', apartments: '🏢', commercial: '🏢', office: '🏢', building: '🏢', yes: '🏢', retail: '🛍️', mall: '🛍️', attraction: '📸', monument: '🗿', memorial: '🗿', museum: '🏛️', place_of_worship: '🛕', temple: '🛕', mosque: '🕌', church: '⛪', park: '🌳', beach: '🏖️', station: '🚉', aerodrome: '✈️', bridge: '🌉', university: '🎓', college: '🎓', school: '🏫', hospital: '🏥', restaurant: '🍽️', cafe: '☕', stadium: '🏟️', fort: '🏰', castle: '🏰', city: '🏙️', town: '🏘️', village: '🏘️', suburb: '🏘️', neighbourhood: '🏘️', road: '🛣️', residential: '🛣️', primary: '🛣️', secondary: '🛣️' }[t] || '📍');
+// coordinates from anything a maps app can give you: Google / Apple links, "geo:" links, "19.0123, 72.8345", or 19°01'23"N 72°50'04"E
 function parseCoords(q) {
-  const m = q.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/) || q.match(/^\s*(-?\d{1,2}\.\d+)\s*[, ]\s*(-?\d{1,3}\.\d+)\s*$/);
-  return m ? [+m[1], +m[2]] : null;
+  const ok = (a, b) => isFinite(a) && isFinite(b) && Math.abs(a) <= 90 && Math.abs(b) <= 180 ? [a, b] : null;
+  const pats = [/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/, /@(-?\d+\.\d+),(-?\d+\.\d+)/,
+    /[?&](?:q|ll|sll|query|daddr|destination|coordinate|center)=(-?\d+\.\d+)(?:,|%2C)\s*(-?\d+\.\d+)/i,
+    /geo:(-?\d+\.\d+),(-?\d+\.\d+)/i, /(?:^|[^\d.])(-?\d{1,2}\.\d{3,})\s*[,\s]\s*(-?\d{1,3}\.\d{3,})(?![\d.])/];
+  for (const p of pats) { const m = q.match(p); if (m) { const r = ok(+m[1], +m[2]); if (r) return r; } }
+  const d = q.match(/(\d{1,2})°\s*(\d{1,2})['′]\s*([\d.]+)["″]?\s*([NS])[\s,]*(\d{1,3})°\s*(\d{1,2})['′]\s*([\d.]+)["″]?\s*([EW])/i);
+  if (d) {
+    const lat = (+d[1] + d[2] / 60 + d[3] / 3600) * (/s/i.test(d[4]) ? -1 : 1), lng = (+d[5] + d[6] / 60 + d[7] / 3600) * (/w/i.test(d[8]) ? -1 : 1);
+    return ok(lat, lng);
+  }
+  return null;
+}
+
+// ── your own saved places: found first in search, kept in this browser, included in the shareable file ──
+const readPlaces = () => { try { const l = JSON.parse(localStorage.getItem('sunscout-places') || '[]'); return Array.isArray(l) ? l : []; } catch { return []; } };
+const writePlaces = list => { try { localStorage.setItem('sunscout-places', JSON.stringify(list)); } catch { /* storage blocked */ } };
+const normName = s => (s || '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, ' ').trim();
+function savePlace(name, lat, lng, detail) {
+  name = name.trim().slice(0, 80); if (!name) return;
+  const list = readPlaces().filter(p => normName(p.name) !== normName(name));
+  list.unshift({ name, lat: +lat.toFixed(6), lng: +lng.toFixed(6), detail: (detail || '').slice(0, 120) });
+  writePlaces(list.slice(0, 500)); renderFixCount();
+}
+function savedMatches(q) {
+  const words = normName(q).split(' ').filter(Boolean); if (!words.length) return [];
+  return readPlaces().filter(p => { const t = normName(p.name + ' ' + (p.detail || '')); return words.every(w => t.includes(w)); })
+    .slice(0, 4).map(p => ({ name: p.name, detail: p.detail ? `⭐ Saved · ${p.detail}` : '⭐ Your saved place', lat: p.lat, lng: p.lng, icon: '⭐' }));
 }
 let sugs = [], sugSel = -1, sugTimer = null, sugCtl = null;
+let pickName = '';
 async function fetchSuggestions(q) {
   const coords = parseCoords(q);
-  if (coords) return [{ name: 'Coordinates', detail: `${coords[0]}, ${coords[1]}`, lat: coords[0], lng: coords[1], icon: '📌' }];
+  const firstLine = q.replace(/https?:\/\/\S+/g, '').split(/[\n\r]+|\s·\s/).map(s => s.trim()).filter(Boolean);
+  pickName = (firstLine[0] || '').slice(0, 80);
+  if (coords) {
+    const fromLink = q.match(/\/maps\/place\/([^/@?]+)/);   // full Google Maps links carry the place's name
+    let nm = fromLink ? decodeURIComponent(fromLink[1].replace(/\+/g, ' ')) : firstLine.length && !parseCoords(firstLine[0]) ? firstLine[0] : null;
+    if (nm && nm.length > 80) nm = nm.slice(0, 80);
+    return [{ name: nm || 'Coordinates', detail: `📌 ${coords[0].toFixed(5)}, ${coords[1].toFixed(5)}${nm ? ' · will be saved to your places' : ''}`, lat: coords[0], lng: coords[1], icon: '📌', saveAs: nm, exact: true }];
+  }
+  let sharedName = null;
+  if (/https?:\/\//i.test(q)) {   // shared from Google / Apple Maps: the link can't be opened, so use the name + address that come with it
+    sharedName = firstLine[0] || null;
+    const mine = sharedName ? savedMatches(sharedName) : [];
+    if (mine.length) return mine;
+    q = (firstLine.length > 1 ? firstLine.slice(1) : firstLine).join(', ');
+    if (!q) return [];
+  }
+  const mine = sharedName ? [] : savedMatches(q);
   sugCtl?.abort(); sugCtl = new AbortController(); const signal = sugCtl.signal;
   const c = map.getCenter();
   const photon = fetch(`https://photon.komoot.io/api/?q=${enc(q)}&limit=8&lat=${c.lat.toFixed(3)}&lon=${c.lng.toFixed(3)}&location_bias_scale=0.4`, { signal })
@@ -350,14 +479,19 @@ async function fetchSuggestions(q) {
     const w = await fetch(`https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&limit=5&q=${enc(q)}`).then(r => r.json()).then(nomMap).catch(() => []);
     out.push(...w);
   }
-  return out.slice(0, 7);
+  if (sharedName) out.forEach(s => { s.areaFor = sharedName; s.detail = `Area near “${sharedName}” · ${s.detail || ''}`; });
+  return [...mine, ...out.filter(s => !mine.some(m => Math.hypot(m.lat - s.lat, m.lng - s.lng) < 0.0005))].slice(0, 7);
 }
 function renderSugs(list, q) {
   const box = $('sugs'); sugs = list; sugSel = list.length ? 0 : -1;
-  if (!list.length) { box.innerHTML = `<div class="empty">No match for “${q.replace(/</g, '&lt;')}”. Try adding the area or city, e.g. “World One, Lower Parel”. You can also paste coordinates or a Google Maps link.</div>`; box.classList.remove('hidden'); return; }
-  box.innerHTML = list.map((s, i) => `<div class="sug${i === 0 ? ' sel' : ''}" data-i="${i}"><span class="ic">${s.icon}</span><div><div class="nm">${s.name.replace(/</g, '&lt;')}</div><div class="dt">${(s.detail || '').replace(/</g, '&lt;')}</div></div></div>`).join('');
+  const esc = t => String(t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const nm = pickName || q;
+  const pickRow = `<div class="sug pickrow${list.length ? '' : ' sel'}" data-pick="1"><span class="ic">📍</span><div><div class="nm">${list.length ? 'Not in the list?' : 'Not on the free map yet.'} Pick “${esc(nm)}” on the map</div><div class="dt">Tap it once on the satellite map. Sun Scout will remember it for next time.</div></div></div>`;
+  const empty = list.length ? '' : `<div class="empty">No match for “${esc(nm)}”. Many shops and new buildings aren't on the free map. Pick it on the map once below, search the area instead (e.g. “Lower Parel”), or paste coordinates from Google Maps (long-press the spot there, then copy the numbers at the top).</div>`;
+  if (list.length && list.every(s => s.exact)) { box.innerHTML = list.map((s, i) => `<div class="sug${i === 0 ? ' sel' : ''}" data-i="${i}"><span class="ic">${s.icon}</span><div><div class="nm">${esc(s.name)}</div><div class="dt">${esc(s.detail)}</div></div></div>`).join(''); box.classList.remove('hidden'); box.querySelectorAll('.sug').forEach(el => el.onmousedown = e => { e.preventDefault(); pick(sugs[+el.dataset.i]); }); return; }
+  box.innerHTML = empty + list.map((s, i) => `<div class="sug${i === 0 ? ' sel' : ''}" data-i="${i}"><span class="ic">${s.icon}</span><div><div class="nm">${esc(s.name)}</div><div class="dt">${esc(s.detail)}</div></div></div>`).join('') + pickRow;
   box.classList.remove('hidden');
-  box.querySelectorAll('.sug').forEach(el => el.onmousedown = e => { e.preventDefault(); pick(sugs[+el.dataset.i]); });
+  box.querySelectorAll('.sug').forEach(el => el.onmousedown = e => { e.preventDefault(); el.dataset.pick ? startPickMode(nm) : pick(sugs[+el.dataset.i]); });
 }
 const hideSugs = () => $('sugs').classList.add('hidden');
 async function suggest(force) {
@@ -371,12 +505,19 @@ async function suggest(force) {
 }
 function pick(s) {
   hideSugs(); $('q').value = s.name; $('q').blur();
+  if (s.saveAs) savePlace(s.saveAs, s.lat, s.lng, 'From a maps link');
+  if (s.areaFor) { map.setView([s.lat, s.lng], 17, { animate: false }); setLocation(s.lat, s.lng, s.areaFor + ' (area)'); startPickMode(s.areaFor, true); return; }
   map.setView([s.lat, s.lng], 17, { animate: false });
   const t = (s.type || '') + ' ' + (s.name || '').toLowerCase();
   state.kindHint = /mosque|masjid|dargah|gurudwara|gurdwara|sikh|muslim/.test(t) ? 'dome' : /church|cathedral|chapel|christian/.test(t) ? 'church' : /temple|mandir|place_of_worship|shrine|derasar|devasthan|hindu|jain/.test(t) ? 'temple' : null;
   setLocation(s.lat, s.lng, [s.name, s.detail].filter(Boolean).join(', '), true);
   if (state.view === 'map') switchView('orbit');   // a search means "show me this place": go straight to 3D
 }
+const oneLine = t => t.replace(/\s*[\n\r]+\s*/g, ' · ').trim();
+$('q').addEventListener('paste', e => {
+  const t = e.clipboardData?.getData('text'); if (!t || !/[\n\r]/.test(t)) return;
+  e.preventDefault(); $('q').value = oneLine(t); clearTimeout(sugTimer); suggest(true);
+});
 $('q').addEventListener('input', () => { clearTimeout(sugTimer); sugTimer = setTimeout(suggest, 300); });
 $('q').addEventListener('focus', () => { if (sugs.length && $('q').value.trim().length >= 3) $('sugs').classList.remove('hidden'); });
 $('q').addEventListener('blur', () => setTimeout(hideSugs, 150));
@@ -388,7 +529,8 @@ $('q').addEventListener('keydown', async e => {
     items.forEach((el, i) => el.classList.toggle('sel', i === sugSel));
   } else if (e.key === 'Enter') {
     e.preventDefault(); clearTimeout(sugTimer);
-    if (!$('sugs').classList.contains('hidden') && sugs[sugSel]) return pick(sugs[sugSel]);
+    const selEl = $('sugs').querySelectorAll('.sug')[sugSel];
+    if (!$('sugs').classList.contains('hidden') && selEl) return selEl.dataset.pick ? startPickMode(pickName || $('q').value.trim()) : pick(sugs[+selEl.dataset.i]);
     const list = await suggest(true); if (list && list.length) pick(list[0]);
   } else if (e.key === 'Escape') hideSugs();
 });
@@ -526,13 +668,27 @@ function renderHills() {
 }
 
 // ───────────────────────── your building fixes: save / load as a file ─────────────────────────
+$('pickCancel').onclick = endPickMode;
+$('savePlace').onclick = () => {
+  const name = prompt('Name this place so you can search for it later:', state.label && !/^My location$/.test(state.label) ? state.label.split(',')[0] : '');
+  if (name && name.trim()) { savePlace(name, state.lat, state.lng, ''); state.label = name.trim(); $('place').textContent = `⭐ Saved “${name.trim()}”.`; }
+};
 const readFixes = () => { try { return JSON.parse(localStorage.getItem('sunscout-edits') || '{}'); } catch { return {}; } };
 function renderFixCount() {
-  const n = Object.keys(readFixes()).length;
-  $('fixCount').textContent = n ? `${n} building${n > 1 ? 's' : ''} fixed and saved in this browser.` : 'No fixes yet. In 3D, click any building to correct it.';
+  const n = Object.keys(readFixes()).length, places = readPlaces();
+  $('fixCount').textContent = (places.length ? '' : 'No saved places yet. Search for one, or pick it on the map. ') + (n ? `${n} building${n > 1 ? 's' : ''} fixed in 3D.` : 'In 3D, click any building to correct it.');
+  const box = $('placesList'); box.innerHTML = '';
+  places.slice(0, 30).forEach(p => {
+    const row = document.createElement('div'); row.className = 'pl';
+    const go = document.createElement('button'); go.className = 'go'; go.textContent = '⭐ ' + p.name;
+    go.onclick = () => { map.setView([p.lat, p.lng], 17, { animate: false }); setLocation(p.lat, p.lng, p.name); scrollTo({ top: 0, behavior: 'smooth' }); };
+    const rm = document.createElement('button'); rm.className = 'rm'; rm.textContent = '✕'; rm.title = 'Remove';
+    rm.onclick = () => { if (confirm(`Remove “${p.name}” from your saved places?`)) { writePlaces(readPlaces().filter(x => !(x.name === p.name && x.lat === p.lat))); renderFixCount(); } };
+    row.append(go, rm); box.appendChild(row);
+  });
 }
 $('fixExport').onclick = () => {
-  const blob = new Blob([JSON.stringify({ app: 'sun-scout', version: 1, fixes: readFixes() }, null, 1)], { type: 'application/json' });
+  const blob = new Blob([JSON.stringify({ app: 'sun-scout', version: 1, fixes: readFixes(), places: readPlaces() }, null, 1)], { type: 'application/json' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'sun-scout-fixes.json'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 };
 $('fixImport').onchange = async e => {
@@ -546,11 +702,13 @@ $('fixImport').onchange = async e => {
       if (Number.isFinite(v.top) && v.top > 0 && v.top < 1000) o.top = v.top;
       if (Object.keys(o).length) clean[k] = o;
     }
+    const places = Array.isArray(data.places) ? data.places.filter(p => p && typeof p.name === 'string' && p.name.trim() && isFinite(p.lat) && isFinite(p.lng) && Math.abs(p.lat) <= 90 && Math.abs(p.lng) <= 180) : [];
+    places.reverse().forEach(p => savePlace(String(p.name), +p.lat, +p.lng, typeof p.detail === 'string' ? p.detail : ''));
     const merged = { ...readFixes(), ...clean };
     try { localStorage.setItem('sunscout-edits', JSON.stringify(merged)); } catch { /* storage blocked */ }
     if (scene3d) { scene3d.memEdits = merged; scene3d.footprints?.forEach(f => scene3d.applyEdit(f)); if (scene3d.footprints?.length) scene3d.buildMeshes(); }
     renderFixCount();
-    alert(`Loaded ${Object.keys(clean).length} building fixes.`);
+    alert(`Loaded ${Object.keys(clean).length} building fixes and ${places.length} saved places.`);
   } catch (err) { alert('That file is not a Sun Scout fixes file.'); }
 };
 
@@ -580,6 +738,17 @@ if (/iphone|ipad|ipod/i.test(navigator.userAgent)) showInstall('In Safari: tap t
 $('installBtn').onclick = async () => { if (!installEvt) return; installEvt.prompt(); await installEvt.userChoice; installEvt = null; $('installBar').classList.add('hidden'); };
 $('installClose').onclick = () => { $('installBar').classList.add('hidden'); try { localStorage.setItem('sunscout-install-dismissed', '1'); } catch { /* no storage */ } };
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+
+// opened from Android's Share menu (e.g. a place shared from Google Maps): search what was shared
+(() => {
+  const sp = new URLSearchParams(location.search);
+  const lines = ['title', 'text', 'url'].flatMap(k => (sp.get(k) || '').split(/[\n\r]+/)).map(t => t.trim()).filter(Boolean);
+  const shared = lines.filter((t, i) => lines.indexOf(t) === i).join('\n');
+  if (!shared) return;
+  history.replaceState(null, '', location.pathname);
+  $('q').value = oneLine(shared);
+  setTimeout(() => { $('q').focus(); suggest(true); }, 400);
+})();
 
 // ───────────────────────── start ─────────────────────────
 if (state.label !== 'Gateway of India, Mumbai') $('place').textContent = '📍 ' + (state.label || `${state.lat.toFixed(5)}, ${state.lng.toFixed(5)}`);

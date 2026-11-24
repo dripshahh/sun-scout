@@ -87,6 +87,7 @@
       <div><button data-mv="l">◀</button><button data-mv="b">▼</button><button data-mv="r">▶</button></div>
     </div>
     <div id="sceneStatus" class="status hidden"></div>
+    <div id="pickBar" class="pickbar hidden"><span id="pickText"></span><button id="pickCancel" class="link">Cancel</button></div>
   </main>
 
   <aside id="side">
@@ -94,7 +95,7 @@
       <div><b>📲 Put Sun Scout on your home screen</b><div id="installHow" class="note"></div></div>
       <div class="row"><button id="installBtn" class="pill small hero hidden">Install</button><button id="installClose" class="link">Not now</button></div>
     </div>
-    <div id="place" class="place">📍 Gateway of India, Mumbai</div>
+    <div class="row between placerow"><div id="place" class="place">📍 Gateway of India, Mumbai</div><button id="savePlace" class="link" title="Save this spot under a name">⭐ Save</button></div>
 
     <div id="score" class="score"><div class="emoji">☀️</div><div><div class="title">–</div><div class="sub">–</div></div></div>
 
@@ -133,6 +134,12 @@
       <div id="hours"></div>
       <div class="hl"><span>12am</span><span>6am</span><span>12pm</span><span>6pm</span><span>11pm</span></div>
       <div class="legend"><i style="background:var(--good)"></i>Sunny <i style="background:var(--mid)"></i>Some cloud <i style="background:var(--grey)"></i>Overcast <i style="background:var(--blue)"></i>Rain</div>
+      <div class="conf">
+        <div class="k">How sure is the forecast? <span class="note">(3 weather models compared)</span></div>
+        <div id="confBar" class="confbar"></div>
+        <div id="confNow" class="note"></div>
+        <div id="bestWindow" class="best"></div>
+      </div>
     </div>
 
     <details class="card">
@@ -143,7 +150,8 @@
     </details>
 
     <div class="card">
-      <h2>🛠️ Your building fixes</h2>
+      <h2>⭐ Your places &amp; fixes</h2>
+      <div id="placesList" class="places"></div>
       <div id="fixCount" class="note">No fixes yet. In 3D, click any building to correct it.</div>
       <div class="row" style="margin-top:8px">
         <button id="fixExport" class="pill small">💾 Save to file</button>
