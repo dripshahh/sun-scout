@@ -737,7 +737,20 @@ addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = 
 if (/iphone|ipad|ipod/i.test(navigator.userAgent)) showInstall('In Safari: tap the Share button ⬆️, then "Add to Home Screen".', false);
 $('installBtn').onclick = async () => { if (!installEvt) return; installEvt.prompt(); await installEvt.userChoice; installEvt = null; $('installBar').classList.add('hidden'); };
 $('installClose').onclick = () => { $('installBar').classList.add('hidden'); try { localStorage.setItem('sunscout-install-dismissed', '1'); } catch { /* no storage */ } };
-if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+// keep the installed app up to date: look for a new version on open and whenever you come back to it,
+// and reload once when it arrives (only if an older version was running)
+const APP_VERSION = 'v4';
+if ('serviceWorker' in navigator && location.protocol === 'https:') {
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController && !reloaded) { reloaded = true; location.reload(); } });
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(reg => {
+    const check = () => reg.update().catch(() => {});
+    check();
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') check(); });
+  }).catch(() => {});
+}
+$('appVersion').textContent = `Sun Scout ${APP_VERSION}`;
 
 // opened from Android's Share menu (e.g. a place shared from Google Maps): search what was shared
 (() => {
