@@ -40,9 +40,9 @@
       <div id="sugs" class="sugs hidden"></div>
     </div>
     <div class="tabs" role="tablist">
-      <button class="tab on" data-view="map">🗺️ Map</button>
-      <button class="tab" data-view="orbit">🏙️ 3D</button>
-      <button class="tab" data-view="street">🚶 Street</button>
+      <button class="tab on" data-view="map">🗺️ <span>Map</span></button>
+      <button class="tab" data-view="orbit">🏙️ <span>3D</span></button>
+      <button class="tab" data-view="street">🚶 <span>Street</span></button>
     </div>
   </header>
 
@@ -77,16 +77,18 @@
     </div>
 
     <div id="sceneTools" class="floating hidden">
-      <button id="bestView" class="pill small hero">🎯 Best view</button>
+      <div class="strip">
+        <button id="bestView" class="pill small hero">🎯 Best view</button>
+        <button id="faceSun" class="pill small">🔆 Face the sun</button>
+        <button id="sunBehind" class="pill small">🙂 Sun behind me</button>
+        <button id="snap" class="pill small">📸 Snapshot</button>
+        <button id="wxBtn" class="pill small on">☁️ Forecast clouds: on</button>
+        <button id="treeBtn" class="pill small on">🌳 Trees: on</button>
+      </div>
       <div class="lens">
         <span class="lbl">Lens</span>
         <button data-mm="16">16</button><button data-mm="24">24</button><button data-mm="35" class="on">35</button><button data-mm="50">50</button><button data-mm="85">85</button>
       </div>
-      <button id="faceSun" class="pill small">🔆 Face the sun</button>
-      <button id="sunBehind" class="pill small">🙂 Sun behind me</button>
-      <button id="wxBtn" class="pill small on">☁️ Forecast clouds: on</button>
-      <button id="treeBtn" class="pill small on">🌳 Trees: on</button>
-      <button id="snap" class="pill small">📸 Snapshot</button>
     </div>
     <div id="sceneHint" class="hint hidden"></div>
     <div id="pad" class="hidden" aria-label="Walk: drag the dot"><div id="knob"></div><span class="padlbl">walk</span></div>

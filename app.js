@@ -736,6 +736,8 @@ async function switchView(view) {
 document.querySelectorAll('.tab').forEach(t => t.onclick = () => switchView(t.dataset.view));
 document.querySelectorAll('#sceneTools .lens button').forEach(b => b.onclick = () => { scene3d?.setLens(Number(b.dataset.mm)); scene3d?.onLensChange(Number(b.dataset.mm)); });
 $('bestView').onclick = () => scene3d && scene3d.bestView();
+// the swipeable button row fades at its right edge until you reach the end
+(() => { const st = document.querySelector('#sceneTools .strip'); const f = () => st.classList.toggle('end', st.scrollLeft + st.clientWidth >= st.scrollWidth - 4); st.addEventListener('scroll', f, { passive: true }); addEventListener('resize', f); new ResizeObserver(f).observe(st); })();
 $('faceSun').onclick = () => scene3d && scene3d.lookAtSun(false);
 $('sunBehind').onclick = () => scene3d && scene3d.lookAtSun(true);
 $('wxBtn').onclick = () => { state.useWx = !state.useWx; $('wxBtn').classList.toggle('on', state.useWx); $('wxBtn').textContent = `☁️ Forecast clouds: ${state.useWx ? 'on' : 'off'}`; update(); };
