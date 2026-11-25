@@ -35,6 +35,7 @@ function setNow() {
   state.date = `${p.y}-${pad2(p.m + 1)}-${pad2(p.d)}`;
   state.minutes = p.h * 60 + p.min;
   $('date').value = state.date; $('t').value = state.minutes;
+  const max = new Date(Date.UTC(p.y, p.m, p.d + 15)); $('date').max = max.toISOString().slice(0, 10);
 }
 
 // ───────────────────────── map ─────────────────────────
@@ -165,7 +166,7 @@ function startCloudLoop() {
   clouds.timer = setInterval(() => { clouds.idx = (clouds.idx + 1) % clouds.frames.length; showCloudFrame(); }, clouds.idx === clouds.frames.length - 1 ? 700 : 700);
 }
 function stopCloudLoop() { clearInterval(clouds.timer); clouds.timer = null; $('cloudPlay').textContent = '▶'; }
-$('cloudBtn').onclick = () => clouds.on ? cloudsOff() : cloudsOn();
+$('cloudBtn').onclick = () => { if (clouds.on) return cloudsOff(); if (fc.on) fcOff(); cloudsOn(); };
 $('cloudPlay').onclick = () => clouds.timer ? (stopCloudLoop(), clouds.idx = clouds.frames.length - 1, showCloudFrame()) : startCloudLoop();
 
 // rain radar (RainViewer)
@@ -180,6 +181,90 @@ $('radarBtn').onclick = async () => {
     if (map.getZoom() > 10) map.flyTo([state.lat, state.lng], 7, { duration: 1.2 });
   } catch (e) { alert('Rain radar is unavailable right now.'); }
 };
+
+// ───────────────────────── 🔮 forecast clouds on the map (any hour, up to 16 days ahead) ─────────────────────────
+// A 7×7 grid of forecasts (~90 km across) from Open-Meteo, drawn as clouds + rain and blended between hours so it moves
+// smoothly with the time slider. Arrows show which way the clouds are drifting (wind at cloud height, 850 hPa).
+const fc = { on: false, data: null, key: '', layer: null, arrows: L.layerGroup(), N: 7, stepLat: 0.135, canvas: document.createElement('canvas'), loading: null };
+fc.canvas.width = fc.canvas.height = 168;
+async function fcLoad() {
+  const key = `${state.lat.toFixed(2)},${state.lng.toFixed(2)}`;
+  if (fc.data && fc.key === key) return;
+  if (fc.loading && fc.loadingKey === key) return fc.loading;
+  const N = fc.N, half = (N - 1) / 2, dLat = fc.stepLat, dLng = fc.stepLat / Math.cos(state.lat * D2R);
+  const lats = [], lngs = [];
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) { lats.push((state.lat + (half - j) * dLat).toFixed(3)); lngs.push((state.lng + (i - half) * dLng).toFixed(3)); }
+  fc.loadingKey = key;
+  fc.loading = (async () => {
+    $('fcNote').textContent = 'Loading the forecast map…';
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lats.join(',')}&longitude=${lngs.join(',')}&hourly=cloud_cover,cloud_cover_low,precipitation,wind_speed_850hPa,wind_direction_850hPa&timezone=auto&forecast_days=16`;
+    const d = await fetch(url).then(r => r.json());
+    if (!Array.isArray(d)) throw new Error(d.reason || 'no data');
+    fc.data = { pts: d, lat0: state.lat + half * dLat, lng0: state.lng - half * dLng, dLat, dLng }; fc.key = key;
+  })();
+  try { await fc.loading; } finally { fc.loading = null; }
+}
+function fcValuesAt(k, idx) {   // [cloudiness 0..1, rain mm] for grid point k at hour index idx
+  const h = fc.data.pts[k].hourly, cc = h.cloud_cover[idx], low = h.cloud_cover_low[idx], pr = h.precipitation[idx];
+  if (cc == null) return null;
+  return [Math.min(1, (0.55 * (low ?? cc) + 0.45 * cc) / 100), pr ?? 0];
+}
+function fcRender() {
+  if (!fc.on || !fc.data) return;
+  const times = fc.data.pts[0].hourly.time, h0 = Math.floor(state.minutes / 60), f = (state.minutes % 60) / 60;
+  const i0 = times.indexOf(`${state.date}T${pad2(h0)}:00`), i1 = h0 < 23 ? i0 + 1 : i0;
+  const dayName = new Date(state.date + 'T12:00:00Z').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
+  if (i0 < 0) {
+    if (fc.layer) fc.layer.setOpacity(0); fc.arrows.clearLayers();
+    $('fcTime').textContent = `🔮 ${dayName}: no forecast`; $('fcNote').textContent = 'Forecasts reach about 16 days ahead. Pick a nearer date.';
+    return;
+  }
+  const N = fc.N, W = fc.canvas.width, g = fc.canvas.getContext('2d'), img = g.createImageData(W, W), px = img.data;
+  const val = [], rain = [];
+  for (let k = 0; k < N * N; k++) {
+    const a = fcValuesAt(k, i0), b = fcValuesAt(k, i1) || a;
+    val.push(a ? a[0] * (1 - f) + b[0] * f : 0); rain.push(a ? a[1] * (1 - f) + b[1] * f : 0);
+  }
+  for (let y = 0; y < W; y++) for (let x = 0; x < W; x++) {   // smooth (bilinear) between the grid points
+    const gx = x / (W - 1) * (N - 1), gy = y / (W - 1) * (N - 1), xi = Math.min(N - 2, Math.floor(gx)), yi = Math.min(N - 2, Math.floor(gy)), fx = gx - xi, fy = gy - yi;
+    const at = (arr) => (arr[yi * N + xi] * (1 - fx) + arr[yi * N + xi + 1] * fx) * (1 - fy) + (arr[(yi + 1) * N + xi] * (1 - fx) + arr[(yi + 1) * N + xi + 1] * fx) * fy;
+    const c = at(val), r = Math.min(1, at(rain) / 2), o = (y * W + x) * 4;
+    const edge = Math.min(1, Math.min(x, y, W - 1 - x, W - 1 - y) / (W * 0.12));   // soft edges
+    const a = Math.max(0, Math.min(1, (c - 0.12) / 0.75)) * edge;
+    px[o] = 255 - r * 170; px[o + 1] = 255 - r * 120; px[o + 2] = 255; px[o + 3] = Math.round(Math.max(a * 210, r * 220 * edge));
+  }
+  g.putImageData(img, 0, 0);
+  const { lat0, lng0, dLat, dLng } = fc.data, half = dLat / 2, halfL = dLng / 2;
+  const bounds = [[lat0 - (N - 1) * dLat - half, lng0 - halfL], [lat0 + half, lng0 + (N - 1) * dLng + halfL]];
+  const url = fc.canvas.toDataURL();
+  if (!fc.layer) fc.layer = L.imageOverlay(url, bounds, { pane: 'clouds', opacity: 1, className: 'cloud-tile' }).addTo(map);
+  else { fc.layer.setUrl(url); fc.layer.setBounds(L.latLngBounds(bounds)); fc.layer.setOpacity(1); }
+  // drift arrows: wind blows FROM wind_direction, clouds move the opposite way
+  if (fc.arrowHour !== `${state.date}${h0}`) {
+    fc.arrowHour = `${state.date}${h0}`; fc.arrows.clearLayers();
+    for (let j = 0; j < N; j += 2) for (let i = 0; i < N; i += 2) {
+      const h = fc.data.pts[j * N + i].hourly, dir = h.wind_direction_850hPa[i0], spd = h.wind_speed_850hPa[i0];
+      if (dir == null) continue;
+      const size = 12 + Math.min(14, (spd || 0) / 3);
+      L.marker([lat0 - j * dLat, lng0 + i * dLng], { interactive: false, pane: 'clouds', icon: L.divIcon({ className: '', iconSize: [size, size], html: `<div class="wind" style="font-size:${size}px;transform:rotate(${(dir + 180) % 360 - 90}deg)">➜</div>` }) }).addTo(fc.arrows);
+    }
+  }
+  const here = fcValuesAt((N * N - 1) / 2, i0), spdHere = fc.data.pts[(N * N - 1) / 2].hourly.wind_speed_850hPa[i0];
+  $('fcTime').textContent = `🔮 ${dayName} · ${fmtMin(state.minutes)}`;
+  $('fcNote').textContent = here ? `Here: ${Math.round(here[0] * 100)}% cloud${here[1] > 0.2 ? ', rain' : ''} · clouds drifting at ${Math.round(spdHere || 0)} km/h (arrows)` : '';
+}
+async function fcOn() {
+  if (clouds.on) cloudsOff();
+  fc.on = true; $('fcBtn').classList.add('on'); $('fcBar').classList.remove('hidden'); fc.arrows.addTo(map);
+  if (map.getZoom() > 10) map.flyTo([state.lat, state.lng], 9, { duration: 1.2 });
+  try { await fcLoad(); fc.arrowHour = null; fcRender(); }
+  catch (e) { $('fcTime').textContent = '🔮 Forecast map unavailable'; $('fcNote').textContent = 'Check your connection and try again.'; }
+}
+function fcOff() {
+  fc.on = false; $('fcBtn').classList.remove('on'); $('fcBar').classList.add('hidden');
+  if (fc.layer) { map.removeLayer(fc.layer); fc.layer = null; } fc.arrows.clearLayers(); map.removeLayer(fc.arrows);
+}
+$('fcBtn').onclick = () => fc.on ? fcOff() : fcOn();
 
 // "Right now, from space": read the satellite cloud mask at the exact spot
 async function checkLiveSky() {
@@ -380,6 +465,7 @@ function update() {
     + `<br>At ${fmt(d)}: ` + (a <= 0 ? 'the sun is down.' : offNow < 90 ? `<b style="color:var(--good)">lit from the front</b>${offNow < 25 ? ', almost head-on' : ''}.` : `<b style="color:var(--bad)">in shade</b>. The sun is behind it, so it's backlit.`);
 
   drawSunOnMap();
+  fcRender();
   if (scene3d && (state.view === 'orbit' || state.view === 'street')) scene3d.setSun(d, cloudFactor(), blocked);
   renderHills();
 }
@@ -393,6 +479,7 @@ function setLocation(lat, lng, label, keepHint) {
   try { localStorage.setItem('sunscout-last', JSON.stringify({ lat, lng, label })); } catch { /* no storage */ }
   sliderGradient(); buildChips(); update();
   loadWeather(); checkLiveSky(); loadHorizon();
+  if (fc.on) { fc.data = null; fc.arrowHour = null; fcLoad().then(fcRender).catch(() => {}); }
   if (scene3d) { scene3d.needsLoad = true; if (state.view === 'orbit' || state.view === 'street') load3D(true); }
 }
 
@@ -739,7 +826,7 @@ $('installBtn').onclick = async () => { if (!installEvt) return; installEvt.prom
 $('installClose').onclick = () => { $('installBar').classList.add('hidden'); try { localStorage.setItem('sunscout-install-dismissed', '1'); } catch { /* no storage */ } };
 // keep the installed app up to date: look for a new version on open and whenever you come back to it,
 // and reload once when it arrives (only if an older version was running)
-const APP_VERSION = 'v4';
+const APP_VERSION = 'v5';
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
   const hadController = !!navigator.serviceWorker.controller;
   let reloaded = false;
