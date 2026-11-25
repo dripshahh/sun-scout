@@ -54,9 +54,13 @@ export class Scene3D {
     this.el = container; this.onStatus = onStatus || (() => {});
     this.active = false; this.mode = 'orbit'; this.keys = {}; this.yaw = 0; this.pitch = 0; this.lensMM = 35;
     this.anim = null;
+    // street-view motion: where you're looking (eased toward tYaw/tPitch), fling spin, walking velocity, joystick input
+    this.tYaw = 0; this.tPitch = 0; this.spin = { y: 0, p: 0 }; this.vel = new THREE.Vector2(); this.move = { f: 0, s: 0 };
+    this.dragging = false; this.busyUntil = 0; this.lastRender = 0;
+    const phone = this.phone = matchMedia('(pointer: coarse)').matches;
 
-    const r = this.renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true, powerPreference: 'high-performance' });
-    r.setPixelRatio(Math.min(devicePixelRatio, 2));
+    const r = this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    r.setPixelRatio(Math.min(devicePixelRatio, phone ? 1.5 : 2));   // phones: sharp enough, far less heat and lag
     r.shadowMap.enabled = true; r.shadowMap.type = THREE.PCFSoftShadowMap; r.shadowMap.autoUpdate = false;
     r.toneMapping = THREE.ACESFilmicToneMapping; r.toneMappingExposure = 0.6;
     container.appendChild(r.domElement);
@@ -74,7 +78,7 @@ export class Scene3D {
     this.sunLight.castShadow = true;
     const sc = this.sunLight.shadow.camera;
     sc.left = sc.bottom = -RADIUS * 1.1; sc.right = sc.top = RADIUS * 1.1; sc.near = 1; sc.far = 4000;
-    this.sunLight.shadow.mapSize.set(4096, 4096);
+    this.sunLight.shadow.mapSize.setScalar(phone ? 2048 : 4096);
     this.sunLight.shadow.bias = -0.0003; this.sunLight.shadow.normalBias = 0.5; this.sunLight.shadow.radius = 2;
     this.scene.add(this.sunLight, this.sunLight.target);
     this.hemi = new THREE.HemisphereLight(0xcfe0ff, 0x5a4c3a, 0.6); this.scene.add(this.hemi);
@@ -100,8 +104,13 @@ export class Scene3D {
     this.controls = new OrbitControls(this.camera, r.domElement);
     this.controls.maxPolarAngle = Math.PI * 0.495; this.controls.minDistance = 10; this.controls.maxDistance = 2500;
     this.controls.enableDamping = true; this.controls.dampingFactor = 0.08; this.controls.target.set(0, 10, 0);
-    this.controls.addEventListener('start', () => { this.anim = null; });
+    this.controls.addEventListener('start', () => this.cancelAnim());
 
+    // anything that changes the picture asks for full-speed drawing for a moment; otherwise the 3D view idles
+    for (const m of ['setSun', 'setDay', 'setTrees', 'setHorizon', 'select', 'buildMeshes', 'setLens', 'setMode', 'load', 'bestView', 'lookAtSun']) {
+      const f = this[m]; if (typeof f !== 'function') continue;
+      this[m] = (...a) => { this.poke(); const res = f.apply(this, a); res?.then?.(() => this.poke(1500)); return res; };
+    }
     this.bindStreetControls();
     new ResizeObserver(() => this.resize()).observe(container);
     this.resize();
@@ -500,10 +509,13 @@ export class Scene3D {
     const day = smooth(-1, 3, alt);
     const warm = new THREE.Color(1.0, 0.52, 0.27), mid = new THREE.Color(1.0, 0.83, 0.64), white = new THREE.Color(1.0, 0.97, 0.93);
     this.sunLight.color.copy(alt < 8 ? warm.clone().lerp(mid, smooth(0, 8, alt)) : mid.clone().lerp(white, smooth(8, 30, alt)));
-    this.sunLight.intensity = (blocked ? 0 : 1) * (alt < 10 ? 4.2 : 3.2) * day * (1 - 0.88 * cloud);
+    // direct sun gets stronger as it climbs (less air to pass through); low sun keeps a little boost so golden hour still glows.
+    // Scattered cloud only dims it partly; a full overcast takes it away.
+    const strength = alt < 15 ? 4.0 - 0.4 * smooth(5, 15, alt) : 3.6 + 1.0 * smooth(15, 60, alt);
+    this.sunLight.intensity = (blocked ? 0 : 1) * strength * day * (1 - 0.9 * Math.pow(cloud, 1.4));
     this.sunLight.castShadow = this.sunLight.intensity > 0.05;
     const ambient = smooth(-10, 5, alt);
-    this.hemi.intensity = 0.15 + ambient * (0.9 + 1.0 * cloud);
+    this.hemi.intensity = 0.15 + ambient * (0.55 + 1.35 * cloud);   // clear sky: deep, crisp shadows; overcast: soft, even light
     this.hemi.color.set(alt < 0 ? 0x5f7cc8 : alt < 8 ? 0xffd8b0 : 0xcfe0ff);
     this.renderer.toneMappingExposure = 0.4 + 0.35 * smooth(-8, 3, alt);
     this.wallMat.emissiveIntensity = 1.4 * (1 - smooth(-7, 1, alt));     // windows glow after sunset
@@ -531,7 +543,27 @@ export class Scene3D {
     }
     return true;
   }
-  setYawPitchToward(p) { const d = p.clone().sub(this.camera.position); this.yaw = Math.atan2(-d.x, -d.z); this.pitch = Math.atan2(d.y, Math.hypot(d.x, d.z)); }
+  // stop a camera flight where it is (you touched the screen): no snapping back to where it started
+  cancelAnim() {
+    const a = this.anim; if (!a) return;
+    if (this.mode === 'street') {
+      if (Math.abs(this.camera.position.y - EYE) > 3) return;   // still flying down to street level: let it land
+      this.anim = null;
+      this.streetPos.copy(this.camera.position);
+      const d = new THREE.Vector3(); this.camera.getWorldDirection(d);
+      this.yaw = this.tYaw = Math.atan2(-d.x, -d.z); this.pitch = this.tPitch = Math.asin(Math.max(-1, Math.min(1, d.y)));
+    } else {
+      this.anim = null;
+      const k = ease(Math.min(1, (performance.now() - a.t0) / a.dur));
+      this.controls.target.lerpVectors(a.fromLook, a.toLook, k);
+    }
+  }
+  setYawPitchToward(p) {
+    const d = p.clone().sub(this.camera.position);
+    this.yaw = this.tYaw = Math.atan2(-d.x, -d.z); this.pitch = this.tPitch = Math.atan2(d.y, Math.hypot(d.x, d.z));
+    this.spin.y = this.spin.p = 0;
+  }
+  poke(ms = 700) { this.busyUntil = Math.max(this.busyUntil, performance.now() + ms); }
 
   // horizontal direction toward the sun (for "front-lit" views); falls back to south
   sunSide() { const v = this.sunVec && this.sunAlt > 0 ? this.sunVec : new THREE.Vector3(0, 0, 1); const h = new THREE.Vector2(v.x, -v.z); return h.lengthSq() < 1e-6 ? new THREE.Vector2(0, -1) : h.normalize(); } // (east, north)
@@ -539,7 +571,9 @@ export class Scene3D {
   // aerial view framing the searched building, from the sunny side
   frameTarget(dur = 1.6) {
     const T = this.target || { cx: 0, cy: 0, rad: 30, top: 20 };
-    const s = this.sunSide(), dist = Math.max(110, T.top * 2.4 + T.rad * 2.2);
+    // three-quarter side light: you see the sunny walls AND the shadows they throw (sun straight behind you hides every shadow)
+    const ss = this.sunSide(), c = Math.cos(70 * D2R), sn = Math.sin(70 * D2R);
+    const s = new THREE.Vector2(ss.x * c - ss.y * sn, ss.x * sn + ss.y * c), dist = Math.max(110, T.top * 2.4 + T.rad * 2.2);
     const pos = this.v3(T.cx + s.x * dist * 0.8, Math.max(60, T.top * 1.1 + dist * 0.45), T.cy + s.y * dist * 0.8);
     this.flyTo(pos, this.v3(T.cx, T.top * 0.45, T.cy), dur);
   }
@@ -725,79 +759,169 @@ export class Scene3D {
     const look = this.streetPos.clone().add(new THREE.Vector3(-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch)).multiplyScalar(50));
     this.flyTo(this.streetPos.clone(), look, 0.9);
   }
-  groundPoint(e) {
+  ray(e) {
     const rect = this.renderer.domElement.getBoundingClientRect();
     const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
-    const ray = new THREE.Raycaster(); ray.setFromCamera(ndc, this.camera);
-    return ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), new THREE.Vector3());
+    const ray = new THREE.Raycaster(); ray.setFromCamera(ndc, this.camera); return ray;
+  }
+  groundPoint(e) { return this.ray(e).ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), new THREE.Vector3()); }
+  // is this street-level spot inside (or touching) a building?
+  blocked(x, z) {
+    const p = [x, -z];
+    for (const f of this.footprints) {
+      if (f.kind === 'removed' || Math.abs(f.cx - p[0]) > f.rad + 1 || Math.abs(f.cy - p[1]) > f.rad + 1) continue;
+      if (inside(p, f.outer) || distToRing(p, f.outer) < 0.45) return true;
+    }
+    return false;
+  }
+  // double-tap / double-click: walk to that spot (stops in front of a wall instead of going inside)
+  walkTo(e) {
+    const ray = this.ray(e);
+    let p = ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), new THREE.Vector3());
+    const hit = ray.intersectObjects(this.bgroup.children.filter(o => o.isMesh), false)[0];
+    if (hit && (!p || hit.distance < ray.ray.origin.distanceTo(p))) {
+      const back = hit.point.clone().sub(ray.ray.origin).setY(0).normalize().multiplyScalar(2.5);
+      p = hit.point.clone().sub(back); p.y = 0;
+    }
+    if (!p || Math.hypot(p.x, p.z) > RADIUS * 1.3) return;
+    const to = new THREE.Vector3(p.x, EYE, p.z);
+    const wasStreet = this.mode === 'street';
+    if (!wasStreet) { this.streetVisited = true; this.mode = 'street'; this.controls.enabled = false; this.applyLens(); this.onModeChange?.('street'); }
+    const T = this.target;
+    const look = wasStreet || !T
+      ? to.clone().add(new THREE.Vector3(-Math.sin(this.yaw) * Math.cos(this.pitch), Math.sin(this.pitch), -Math.cos(this.yaw) * Math.cos(this.pitch)).multiplyScalar(50))
+      : this.v3(T.cx, Math.min(T.top * 0.5, 40), T.cy);
+    const dist = this.camera.position.distanceTo(to);
+    this.vel.set(0, 0); this.streetPos.copy(to);
+    this.flyTo(to, look, wasStreet ? Math.min(2.2, Math.max(0.6, 0.45 + dist / 45)) : 1.3);
   }
   bindStreetControls() {
     const el = this.renderer.domElement;
-    let drag = null, down = null, clickTimer = null;
-    el.addEventListener('pointerdown', e => { down = { x: e.clientX, y: e.clientY, t: performance.now() }; });
-    el.addEventListener('pointerup', e => {
-      if (!down || e.button !== 0) return;
-      const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y), quick = performance.now() - down.t < 450; down = null;
-      if (moved > 5 || !quick) return;
-      const ev = { clientX: e.clientX, clientY: e.clientY };
-      clearTimeout(clickTimer); clickTimer = setTimeout(() => this.pick(ev), 240);   // wait: it may be a double-click
+    el.style.touchAction = 'none';
+    const pts = new Map();
+    let pinch = null, down = null, lastTap = null, tapTimer = null, samples = [];
+    const nearestLens = mm => LENSES.reduce((a, b) => Math.abs(b - mm) < Math.abs(a - mm) ? b : a);
+    el.addEventListener('pointerdown', e => {
+      if (e.pointerType === 'mouse') pts.clear();
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      down = pts.size === 1 && e.button === 0 ? { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now() } : null;
+      this.poke();
+      if (this.mode !== 'street') return;
+      try { el.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+      this.spin.y = this.spin.p = 0; this.cancelAnim(); samples = [];
+      if (pts.size === 2) { const [a, b] = [...pts.values()]; pinch = { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, mm: this.lensMM }; }
+      this.dragging = pts.size === 1;
     });
-    el.addEventListener('pointerdown', e => { if (this.mode !== 'street') return; this.anim = null; drag = { x: e.clientX, y: e.clientY }; el.setPointerCapture(e.pointerId); });
     el.addEventListener('pointermove', e => {
-      if (!drag || this.mode !== 'street') return;
-      const k = 0.0035 * (this.camera.fov / 50);
-      this.yaw += (e.clientX - drag.x) * k; this.pitch += (e.clientY - drag.y) * k;
-      this.pitch = Math.max(-1.4, Math.min(1.4, this.pitch)); drag = { x: e.clientX, y: e.clientY };
+      const p = pts.get(e.pointerId); if (!p) return;
+      const dx = e.clientX - p.x, dy = e.clientY - p.y; p.x = e.clientX; p.y = e.clientY;
+      if (this.mode !== 'street' || this.anim) return;
+      this.poke();
+      if (pinch && pts.size >= 2) {   // two fingers: zoom through focal lengths, like a zoom lens
+        const [a, b] = [...pts.values()], d = Math.hypot(a.x - b.x, a.y - b.y);
+        const mm = Math.max(12, Math.min(135, pinch.mm * d / pinch.d));
+        this.setLens(mm); this.onLensChange?.(nearestLens(mm)); return;
+      }
+      if (!this.dragging) return;
+      const k = (this.camera.fov * D2R) / (el.clientHeight || 600);   // the ground moves with your finger
+      this.tYaw += dx * k; this.tPitch = Math.max(-1.4, Math.min(1.4, this.tPitch + dy * k));
+      const now = performance.now(); samples.push({ t: now, y: dx * k, p: dy * k }); while (samples.length && now - samples[0].t > 120) samples.shift();
     });
-    const end = () => { drag = null; };
-    el.addEventListener('pointerup', end); el.addEventListener('pointercancel', end);
+    const up = e => {
+      if (!pts.has(e.pointerId)) return;
+      pts.delete(e.pointerId);
+      const now = performance.now();
+      if (this.mode === 'street' && this.dragging && pts.size === 0 && e.type === 'pointerup') {   // a flick keeps turning a little, then glides to a stop
+        const recent = samples.filter(s => now - s.t < 90);
+        if (recent.length >= 2) {
+          const span = Math.max(0.03, (now - recent[0].t) / 1000);
+          const cap = 3.5, sy = recent.reduce((a, s) => a + s.y, 0) / span, sp = recent.reduce((a, s) => a + s.p, 0) / span;
+          this.spin.y = Math.max(-cap, Math.min(cap, sy)); this.spin.p = Math.max(-cap, Math.min(cap, sp)) * 0.5;
+        }
+      }
+      if (pts.size < 2) pinch = null;
+      this.dragging = this.mode === 'street' && pts.size === 1;
+      samples = [];
+      // tap = pick a building; double-tap = walk there
+      if (e.type !== 'pointerup' || !down || down.id !== e.pointerId) return;
+      const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y), quick = now - down.t < 400; down = null;
+      if (moved > 10 || !quick) return;
+      this.spin.y = this.spin.p = 0;
+      const ev = { clientX: e.clientX, clientY: e.clientY };
+      if (lastTap && now - lastTap.t < 350 && Math.hypot(ev.clientX - lastTap.x, ev.clientY - lastTap.y) < 40) {
+        clearTimeout(tapTimer); lastTap = null; this.walkTo(ev); return;
+      }
+      lastTap = { t: now, x: ev.clientX, y: ev.clientY };
+      clearTimeout(tapTimer); tapTimer = setTimeout(() => { lastTap = null; this.pick(ev); }, 300);
+    };
+    el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
+    el.addEventListener('lostpointercapture', up);
     el.addEventListener('wheel', e => {   // in street mode the scroll wheel zooms through the lenses
+      this.poke();
       if (this.mode !== 'street') return; e.preventDefault();
-      const i = LENSES.indexOf(this.lensMM), j = Math.max(0, Math.min(LENSES.length - 1, i + (e.deltaY > 0 ? 1 : -1)));
-      if (j !== i) { this.setLens(LENSES[j]); this.onLensChange?.(LENSES[j]); }
+      const i = LENSES.indexOf(nearestLens(this.lensMM)), j = Math.max(0, Math.min(LENSES.length - 1, i + (e.deltaY > 0 ? 1 : -1)));
+      if (LENSES[j] !== this.lensMM) { this.setLens(LENSES[j]); this.onLensChange?.(LENSES[j]); }
     }, { passive: false });
-    el.addEventListener('dblclick', e => {
-      clearTimeout(clickTimer);
-      const p = this.groundPoint(e); if (!p || Math.hypot(p.x, p.z) > RADIUS * 1.4) return;
-      const to = new THREE.Vector3(p.x, EYE, p.z);
-      const T = this.target, look = T ? this.v3(T.cx, Math.min(T.top * 0.5, 40), T.cy) : this.currentLook().setY(EYE + 5);
-      if (this.mode !== 'street') { this.streetVisited = true; this.mode = 'street'; this.controls.enabled = false; this.applyLens(); this.onModeChange?.('street'); }
-      this.streetPos.copy(to);
-      this.flyTo(to, this.mode === 'street' && T ? look : this.currentLook(), 1.2);
-    });
-    addEventListener('keydown', e => { if (e.target.tagName !== 'INPUT') this.keys[e.key.toLowerCase()] = true; });
+    addEventListener('keydown', e => { if (e.target.tagName !== 'INPUT') { this.keys[e.key.toLowerCase()] = true; this.poke(); } });
     addEventListener('keyup', e => { this.keys[e.key.toLowerCase()] = false; });
-    addEventListener('blur', () => { this.keys = {}; });
+    addEventListener('blur', () => { this.keys = {}; this.move.f = this.move.s = 0; });
   }
+  // street level: eased looking, a gentle glide after a flick, and walking that speeds up / slows down smoothly
   updateStreet(dt) {
-    const k = this.keys, run = k.shift ? 14 : 5;
-    let f = 0, s = 0;
+    let changed = false;
+    if (!this.dragging && (this.spin.y || this.spin.p)) {
+      this.tYaw += this.spin.y * dt; this.tPitch = Math.max(-1.4, Math.min(1.4, this.tPitch + this.spin.p * dt));
+      const f = Math.exp(-dt * 4.5); this.spin.y *= f; this.spin.p *= f;
+      if (Math.abs(this.spin.y) < 0.02 && Math.abs(this.spin.p) < 0.02) this.spin.y = this.spin.p = 0;
+      changed = true;
+    }
+    const ez = 1 - Math.exp(-dt * 22), dyaw = this.tYaw - this.yaw, dp = this.tPitch - this.pitch;
+    if (Math.abs(dyaw) > 1e-5 || Math.abs(dp) > 1e-5) { this.yaw += dyaw * ez; this.pitch += dp * ez; changed = true; }
+    else { this.yaw = this.tYaw; this.pitch = this.tPitch; }
+
+    const k = this.keys;
+    let f = this.move.f, s = this.move.s;
     if (k.w || k.arrowup || k['pad-f']) f += 1;
     if (k.s || k.arrowdown || k['pad-b']) f -= 1;
     if (k.d || k.arrowright || k['pad-r']) s += 1;
     if (k.a || k.arrowleft || k['pad-l']) s -= 1;
-    if (f || s) {
-      const fx = -Math.sin(this.yaw), fz = -Math.cos(this.yaw);
-      this.streetPos.x += (fx * f + -fz * s) * run * dt;
-      this.streetPos.z += (fz * f + fx * s) * run * dt;
-      const d = Math.hypot(this.streetPos.x, this.streetPos.z);
-      if (d > RADIUS * 1.3) { this.streetPos.x *= RADIUS * 1.3 / d; this.streetPos.z *= RADIUS * 1.3 / d; }
+    const m = Math.hypot(f, s); if (m > 1) { f /= m; s /= m; }
+    const speed = k.shift ? 14 : 6;
+    const fx = -Math.sin(this.yaw), fz = -Math.cos(this.yaw);
+    const wx = (fx * f - fz * s) * speed, wz = (fz * f + fx * s) * speed;
+    const acc = 1 - Math.exp(-dt * (f || s ? 6 : 9));
+    this.vel.x += (wx - this.vel.x) * acc; this.vel.y += (wz - this.vel.y) * acc;
+    if (!f && !s && this.vel.lengthSq() < 0.0004) this.vel.set(0, 0);
+    if (this.vel.x || this.vel.y) {
+      const P = this.streetPos, nx = P.x + this.vel.x * dt, nz = P.z + this.vel.y * dt;
+      if (this.blocked(P.x, P.z) || !this.blocked(nx, nz)) { P.x = nx; P.z = nz; }        // free (or escaping from inside a building)
+      else if (!this.blocked(nx, P.z)) { P.x = nx; this.vel.y = 0; }                       // slide along the wall
+      else if (!this.blocked(P.x, nz)) { P.z = nz; this.vel.x = 0; }
+      else this.vel.set(0, 0);
+      const d = Math.hypot(P.x, P.z);
+      if (d > RADIUS * 1.3) { P.x *= RADIUS * 1.3 / d; P.z *= RADIUS * 1.3 / d; }
+      changed = true;
     }
     this.camera.position.copy(this.streetPos);
     this.camera.rotation.order = 'YXZ';
     this.camera.rotation.set(this.pitch, this.yaw, 0);
+    return changed;
   }
 
   resize() {
     const w = this.el.clientWidth, h = this.el.clientHeight; if (!w || !h) return;
-    this.renderer.setSize(w, h); this.camera.aspect = w / h; this.applyLens();
+    this.renderer.setSize(w, h); this.camera.aspect = w / h; this.applyLens(); this.poke();
   }
   loop(now) {
     requestAnimationFrame(this.loop);
-    const dt = Math.min(0.1, (now - this.last) / 1000); this.last = now;
+    const dt = Math.min(0.05, (now - this.last) / 1000); this.last = now;
     if (!this.active) return;
-    if (!this.stepAnim(now)) { if (this.mode === 'street') this.updateStreet(dt); else this.controls.update(); }
-    this.renderer.render(this.scene, this.camera);
+    let changed;
+    if (this.stepAnim(now)) changed = true;
+    else if (this.mode === 'street') changed = this.updateStreet(dt);
+    else changed = this.controls.update();
+    // draw every frame while something moves; when still, refresh only now and then (saves battery, keeps phones cool)
+    if (changed || now < this.busyUntil || now - this.lastRender > 500) { this.renderer.render(this.scene, this.camera); this.lastRender = now; }
   }
   snapshot(name) {
     this.renderer.render(this.scene, this.camera);

@@ -1,12 +1,21 @@
 // Sun Scout service worker: opens fast on 4G, keeps the app (and places you've looked at) available with a weak signal.
 // Bump VERSION whenever you upload a new version of the app files.
-const VERSION = 'sunscout-v5';
+const VERSION = 'sunscout-v6';
 const SHELL = ['./', './index.html', './style.css', './app.js', './scene3d.js', './terrain.js', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png', './icons/favicon-32.png'];
 const LIBS = 'sunscout-libs-v1', TILES = 'sunscout-tiles-v1', MAX_TILES = 1500;
 
+const LIB_URLS = ['https://unpkg.com/leaflet@1.9.4/dist/leaflet.css', 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js', 'https://unpkg.com/suncalc@1.9.0/suncalc.js'];
+
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  e.waitUntil((async () => {
+    // fresh copies straight from the server (not the browser's short-term cache), so a new version is really new
+    const c = await caches.open(VERSION);
+    await c.addAll(SHELL.map(u => new Request(u, { cache: 'reload' })));
+    const libs = await caches.open(LIBS);
+    await Promise.all(LIB_URLS.map(async u => { if (!(await libs.match(u))) { try { const r = await fetch(u, { mode: 'cors' }); if (r.ok) await libs.put(u, r); } catch { /* fetched later */ } } }));
+    await self.skipWaiting();
+  })());
 });
 self.addEventListener('activate', e => {
   e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k.startsWith('sunscout-v') && k !== VERSION).map(k => caches.delete(k)))).then(() => self.clients.claim()));
@@ -26,17 +35,15 @@ self.addEventListener('fetch', e => {
   const req = e.request; if (req.method !== 'GET') return;
   const u = new URL(req.url);
 
-  // app files: try the network first (so updates show up), fall back to the saved copy when offline / slow
+  // app files: open instantly from the saved copy, then refresh it in the background.
+  // A new version arrives as a new service worker (VERSION above), and the app reloads itself once it's in.
   if (u.origin === self.location.origin) {
     e.respondWith((async () => {
       const cache = await caches.open(VERSION);
-      try {
-        const res = await Promise.race([fetch(req, { cache: 'no-cache' }), new Promise((_, rej) => setTimeout(() => rej(new Error('slow')), 4000))]);
-        if (res.ok) cache.put(req, res.clone());
-        return res;
-      } catch (err) {
-        return (await cache.match(req, { ignoreSearch: true })) || (await cache.match('./index.html')) || Response.error();
-      }
+      const hit = await cache.match(req, { ignoreSearch: true }) || (req.mode === 'navigate' ? await cache.match('./index.html') : null);
+      const net = fetch(req, { cache: 'no-cache' }).then(res => { if (res.ok && !u.search) cache.put(req, res.clone()); return res; });
+      if (hit) { e.waitUntil(net.catch(() => {})); return hit; }
+      try { return await net; } catch { return Response.error(); }
     })());
     return;
   }

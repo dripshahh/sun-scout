@@ -13,9 +13,13 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Sun Scout">
+<link rel="preconnect" href="https://unpkg.com" crossorigin>
+<link rel="preconnect" href="https://server.arcgisonline.com">
+<link rel="preconnect" href="https://api.open-meteo.com" crossorigin>
+<link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://unpkg.com/suncalc@1.9.0/suncalc.js"></script>
+<script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script defer src="https://unpkg.com/suncalc@1.9.0/suncalc.js"></script>
 <script type="importmap">
 { "imports": {
   "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
@@ -32,6 +36,7 @@
       <input id="q" type="text" autocomplete="off" placeholder="Type a building, place or address… (e.g. Trident Nariman Point)">
       <button id="go">Go</button>
       <button id="locate" title="Use my location" aria-label="Use my location">📍</button>
+      <button id="myPlaces" title="Your saved places" aria-label="Your saved places">⭐</button>
       <div id="sugs" class="sugs hidden"></div>
     </div>
     <div class="tabs" role="tablist">
@@ -84,10 +89,8 @@
       <button id="snap" class="pill small">📸 Snapshot</button>
     </div>
     <div id="sceneHint" class="hint hidden"></div>
-    <div id="pad" class="hidden">
-      <button data-mv="f">▲</button>
-      <div><button data-mv="l">◀</button><button data-mv="b">▼</button><button data-mv="r">▶</button></div>
-    </div>
+    <div id="pad" class="hidden" aria-label="Walk: drag the dot"><div id="knob"></div><span class="padlbl">walk</span></div>
+    <div id="toast" class="toast hidden"></div>
     <div id="sceneStatus" class="status hidden"></div>
     <div id="pickBar" class="pickbar hidden"><span id="pickText"></span><button id="pickCancel" class="link">Cancel</button></div>
   </main>

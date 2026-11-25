@@ -84,6 +84,7 @@ map.on('click', e => {
     savePlace(name, lat, lng, 'Picked on the map');
     setLocation(lat, lng, name);
     $('place').textContent = `⭐ Saved “${name}”. It will come up in search from now on.`;
+    toast(`⭐ Saved “${name}”. Tap ⭐ next to search to come back to it.`);
     setTimeout(() => { $('place').textContent = '📍 ' + name; }, 5000);
     return;
   }
@@ -374,7 +375,14 @@ function wxAt(dayStr, hour) {
 const isRain = x => x && (x.pr > 0.2 || x.pp >= 60);
 const wxColor = x => !x ? '#333' : isRain(x) ? 'var(--blue)' : (x.low < 25 && x.cc < 40) ? 'var(--good)' : x.low < 60 ? 'var(--mid)' : 'var(--grey)';
 // 0 = clear, 1 = fully overcast; drives the 3D lighting
-function cloudFactor() { const x = wxAt(state.date, Math.floor(state.minutes / 60)); return x && state.useWx ? clamp((0.7 * x.low + 0.3 * x.cc) / 100 + (isRain(x) ? 0.2 : 0), 0, 1) : 0; }
+// cloud over the sun at this minute: blended between forecast hours, so the light changes smoothly as you drag the time
+function cloudFactor() {
+  if (!state.useWx) return 0;
+  const cf = h => { const x = wxAt(state.date, h); return x ? clamp((0.7 * x.low + 0.3 * x.cc) / 100 + (isRain(x) ? 0.2 : 0), 0, 1) : null; };
+  const h = state.minutes / 60, h0 = Math.floor(h), a = cf(h0); if (a == null) return 0;
+  const b = h0 < 23 ? cf(h0 + 1) : null;
+  return b == null ? a : a + (b - a) * (h - h0);
+}
 
 // ───────────────────────── panels ─────────────────────────
 function lightQuality(a) { return a < -6 ? 'Night' : a < 0 ? 'Blue hour' : a < 6 ? 'Golden, warm' : a < 20 ? 'Low, directional' : a < 50 ? 'Neutral' : 'Harsh, overhead'; }
@@ -575,11 +583,31 @@ function renderSugs(list, q) {
   const nm = pickName || q;
   const pickRow = `<div class="sug pickrow${list.length ? '' : ' sel'}" data-pick="1"><span class="ic">📍</span><div><div class="nm">${list.length ? 'Not in the list?' : 'Not on the free map yet.'} Pick “${esc(nm)}” on the map</div><div class="dt">Tap it once on the satellite map. Sun Scout will remember it for next time.</div></div></div>`;
   const empty = list.length ? '' : `<div class="empty">No match for “${esc(nm)}”. Many shops and new buildings aren't on the free map. Pick it on the map once below, search the area instead (e.g. “Lower Parel”), or paste coordinates from Google Maps (long-press the spot there, then copy the numbers at the top).</div>`;
-  if (list.length && list.every(s => s.exact)) { box.innerHTML = list.map((s, i) => `<div class="sug${i === 0 ? ' sel' : ''}" data-i="${i}"><span class="ic">${s.icon}</span><div><div class="nm">${esc(s.name)}</div><div class="dt">${esc(s.detail)}</div></div></div>`).join(''); box.classList.remove('hidden'); box.querySelectorAll('.sug').forEach(el => el.onmousedown = e => { e.preventDefault(); pick(sugs[+el.dataset.i]); }); return; }
+  if (list.length && list.every(s => s.exact)) { box.innerHTML = list.map((s, i) => `<div class="sug${i === 0 ? ' sel' : ''}" data-i="${i}"><span class="ic">${s.icon}</span><div><div class="nm">${esc(s.name)}</div><div class="dt">${esc(s.detail)}</div></div></div>`).join(''); box.classList.remove('hidden'); bindSugs(box, el => pick(sugs[+el.dataset.i])); return; }
   box.innerHTML = empty + list.map((s, i) => `<div class="sug${i === 0 ? ' sel' : ''}" data-i="${i}"><span class="ic">${s.icon}</span><div><div class="nm">${esc(s.name)}</div><div class="dt">${esc(s.detail)}</div></div></div>`).join('') + pickRow;
   box.classList.remove('hidden');
-  box.querySelectorAll('.sug').forEach(el => el.onmousedown = e => { e.preventDefault(); el.dataset.pick ? startPickMode(nm) : pick(sugs[+el.dataset.i]); });
+  bindSugs(box, el => el.dataset.pick ? startPickMode(nm) : pick(sugs[+el.dataset.i]));
 }
+function bindSugs(box, act) { box.querySelectorAll('.sug').forEach(el => { el.onmousedown = e => e.preventDefault(); el.onclick = () => act(el); }); }
+// ⭐ your places: one tap from the search bar, plus "save this spot"
+function showPlaces() {
+  const box = $('sugs'), list = readPlaces();
+  const esc = t => String(t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  sugs = list.map(p => ({ name: p.name, detail: p.detail || 'Your saved place', lat: p.lat, lng: p.lng, icon: '⭐' })); sugSel = -1;
+  const here = state.label ? state.label.split(',')[0] : `${state.lat.toFixed(5)}, ${state.lng.toFixed(5)}`;
+  box.innerHTML = `<div class="sughead">⭐ Your places${list.length ? ` (${list.length})` : ''}</div>`
+    + (list.length ? '' : '<div class="empty">Nothing saved yet. Missing a shop or building? Search the nearest road or area, tap the exact spot on the map, then tap ⭐ Save. It will come up here and in search.</div>')
+    + sugs.map((s, i) => `<div class="sug" data-i="${i}"><span class="ic">⭐</span><div><div class="nm">${esc(s.name)}</div><div class="dt">${esc(s.detail)}</div></div></div>`).join('')
+    + `<div class="sug pickrow" data-save="1"><span class="ic">➕</span><div><div class="nm">Save the current spot</div><div class="dt">📍 ${esc(here)}</div></div></div>`
+    + `<div class="sug pickrow" data-newpick="1"><span class="ic">📍</span><div><div class="nm">Add a place that's missing from the map</div><div class="dt">Name it, then tap its exact spot on the satellite map</div></div></div>`;
+  box.classList.remove('hidden');
+  bindSugs(box, el => {
+    if (el.dataset.save) { hideSugs(); $('savePlace').click(); return; }
+    if (el.dataset.newpick) { hideSugs(); const n = prompt('Name of the place (e.g. Dev Darshan):', $('q').value.trim()); if (n && n.trim()) startPickMode(n); return; }
+    const p = sugs[+el.dataset.i]; hideSugs(); $('q').blur(); goPlace(p);
+  });
+}
+function goPlace(p) { state.kindHint = null; map.setView([p.lat, p.lng], 17, { animate: false }); setLocation(p.lat, p.lng, p.name); }
 const hideSugs = () => $('sugs').classList.add('hidden');
 async function suggest(force) {
   const q = $('q').value.trim();
@@ -605,8 +633,13 @@ $('q').addEventListener('paste', e => {
   const t = e.clipboardData?.getData('text'); if (!t || !/[\n\r]/.test(t)) return;
   e.preventDefault(); $('q').value = oneLine(t); clearTimeout(sugTimer); suggest(true);
 });
-$('q').addEventListener('input', () => { clearTimeout(sugTimer); sugTimer = setTimeout(suggest, 300); });
-$('q').addEventListener('focus', () => { if (sugs.length && $('q').value.trim().length >= 3) $('sugs').classList.remove('hidden'); });
+$('q').addEventListener('input', () => { clearTimeout(sugTimer); if (!$('q').value.trim()) { if (readPlaces().length) showPlaces(); else hideSugs(); return; } sugTimer = setTimeout(suggest, 300); });
+$('q').addEventListener('focus', () => {
+  if (!$('q').value.trim()) { if (readPlaces().length) showPlaces(); }
+  else if (sugs.length && $('q').value.trim().length >= 3) $('sugs').classList.remove('hidden');
+});
+$('myPlaces').onmousedown = e => e.preventDefault();
+$('myPlaces').onclick = () => { if (!$('sugs').classList.contains('hidden') && $('sugs').querySelector('.sughead')) return hideSugs(); showPlaces(); };
 $('q').addEventListener('blur', () => setTimeout(hideSugs, 150));
 $('q').addEventListener('keydown', async e => {
   const items = $('sugs').querySelectorAll('.sug');
@@ -681,9 +714,14 @@ function setTabs(view) {
   $('faceSun').classList.toggle('hidden', view !== 'street'); $('sunBehind').classList.toggle('hidden', view !== 'street');
   if (!own3d) { $('editPanel').classList.add('hidden'); scene3d?.select(null); }
   $('sceneHint').textContent = view === 'street'
-    ? 'Drag to look · W A S D / arrows to walk · scroll to change lens · click a building to fix it'
+    ? 'Drag to look · W A S D / arrows to walk (Shift to run) · double-click to jump there · scroll to change lens · click a building to fix it'
     : 'Drag to spin · scroll to zoom · double-click the ground to stand there · click a building to fix it';
+  document.body.classList.toggle('in3d', own3d);
   if (view === 'map') { map.invalidateSize(); drawSunOnMap(); status3D(null); }
+  if (own3d && matchMedia('(pointer: coarse)').matches && !setTabs.shown?.[view]) {
+    (setTabs.shown ||= {})[view] = true;
+    toast(view === 'street' ? '👆 Drag to look around · 🕹️ thumb stick to walk · double-tap to jump there · pinch for lens' : '👆 Drag to spin · pinch to zoom · double-tap the ground to stand there · tap a building to fix it', 5500);
+  }
   scene3d?.setActive(own3d);
 }
 async function switchView(view) {
@@ -704,10 +742,24 @@ $('wxBtn').onclick = () => { state.useWx = !state.useWx; $('wxBtn').classList.to
 const shotName = () => `sun-scout-${state.date}-${fmt(selected()).replace(':', '')}.png`;
 $('treeBtn').onclick = () => { const on = !$('treeBtn').classList.contains('on'); $('treeBtn').classList.toggle('on', on); $('treeBtn').textContent = `🌳 Trees: ${on ? 'on' : 'off'}`; scene3d?.setTrees(on); };
 $('snap').onclick = () => scene3d && scene3d.snapshot(shotName());
-document.querySelectorAll('#pad button').forEach(b => {
-  const set = v => e => { if (v) e.preventDefault(); const k = 'pad-' + b.dataset.mv; if (scene3d) scene3d.keys[k] = v; };
-  b.addEventListener('pointerdown', set(true)); ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => b.addEventListener(ev, set(false)));
-});
+// phone walking: a thumb joystick. Push further to walk faster; let go and you ease to a stop.
+(() => {
+  const pad = $('pad'), knob = $('knob'); let id = null;
+  const setMove = (f, s) => { if (scene3d) { scene3d.move.f = f; scene3d.move.s = s; scene3d.poke(); } };
+  const at = e => {
+    const r = pad.getBoundingClientRect(), R = r.width / 2;
+    let x = e.clientX - r.left - R, y = e.clientY - r.top - R; const d = Math.hypot(x, y), max = R * 0.62;
+    if (d > max) { x *= max / d; y *= max / d; }
+    knob.style.transform = `translate(${x}px, ${y}px)`;
+    const dz = v => Math.abs(v) < 0.12 ? 0 : v;     // a small dead zone so a resting thumb doesn't creep
+    setMove(dz(-y / max), dz(x / max));
+  };
+  pad.addEventListener('pointerdown', e => { e.preventDefault(); id = e.pointerId; try { pad.setPointerCapture(id); } catch { /* ignore */ } pad.classList.add('on'); at(e); });
+  pad.addEventListener('pointermove', e => { if (e.pointerId === id) at(e); });
+  const end = e => { if (e.pointerId !== id) return; id = null; knob.style.transform = ''; pad.classList.remove('on'); setMove(0, 0); };
+  pad.addEventListener('pointerup', end); pad.addEventListener('pointercancel', end); pad.addEventListener('lostpointercapture', end);
+})();
+function toast(msg, ms = 4000) { const t = $('toast'); t.textContent = msg; t.classList.remove('hidden'); clearTimeout(toast.tm); toast.tm = setTimeout(() => t.classList.add('hidden'), ms); }
 
 // ── fix-a-building panel ──
 const KIND_LABEL = { building: 'a building', temple: 'a temple', dome: 'a domed building', church: 'a church', low: 'a low building', removed: 'open ground' };
@@ -758,7 +810,7 @@ function renderHills() {
 $('pickCancel').onclick = endPickMode;
 $('savePlace').onclick = () => {
   const name = prompt('Name this place so you can search for it later:', state.label && !/^My location$/.test(state.label) ? state.label.split(',')[0] : '');
-  if (name && name.trim()) { savePlace(name, state.lat, state.lng, ''); state.label = name.trim(); $('place').textContent = `⭐ Saved “${name.trim()}”.`; }
+  if (name && name.trim()) { savePlace(name, state.lat, state.lng, ''); state.label = name.trim(); $('place').textContent = `⭐ Saved “${name.trim()}”.`; toast(`⭐ Saved “${name.trim()}”. Find it any time with the ⭐ button next to search.`); }
 };
 const readFixes = () => { try { return JSON.parse(localStorage.getItem('sunscout-edits') || '{}'); } catch { return {}; } };
 function renderFixCount() {
@@ -768,7 +820,7 @@ function renderFixCount() {
   places.slice(0, 30).forEach(p => {
     const row = document.createElement('div'); row.className = 'pl';
     const go = document.createElement('button'); go.className = 'go'; go.textContent = '⭐ ' + p.name;
-    go.onclick = () => { map.setView([p.lat, p.lng], 17, { animate: false }); setLocation(p.lat, p.lng, p.name); scrollTo({ top: 0, behavior: 'smooth' }); };
+    go.onclick = () => { goPlace(p); scrollTo({ top: 0, behavior: 'smooth' }); };
     const rm = document.createElement('button'); rm.className = 'rm'; rm.textContent = '✕'; rm.title = 'Remove';
     rm.onclick = () => { if (confirm(`Remove “${p.name}” from your saved places?`)) { writePlaces(readPlaces().filter(x => !(x.name === p.name && x.lat === p.lat))); renderFixCount(); } };
     row.append(go, rm); box.appendChild(row);
@@ -826,7 +878,7 @@ $('installBtn').onclick = async () => { if (!installEvt) return; installEvt.prom
 $('installClose').onclick = () => { $('installBar').classList.add('hidden'); try { localStorage.setItem('sunscout-install-dismissed', '1'); } catch { /* no storage */ } };
 // keep the installed app up to date: look for a new version on open and whenever you come back to it,
 // and reload once when it arrives (only if an older version was running)
-const APP_VERSION = 'v5';
+const APP_VERSION = 'v6';
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
   const hadController = !!navigator.serviceWorker.controller;
   let reloaded = false;
@@ -858,4 +910,9 @@ loadWeather();
 checkLiveSky();
 loadHorizon();
 renderFixCount();
-window.sunScout = { state, map }; // handy for debugging in the console
+(() => {
+  const c = navigator.connection; if (c && (c.saveData || /2g/.test(c.effectiveType || ''))) return;
+  const warm = () => import('./scene3d.js').catch(() => {});
+  addEventListener('load', () => setTimeout(() => (window.requestIdleCallback || setTimeout)(warm, { timeout: 4000 }), 2500), { once: true });
+})();
+window.sunScout = { state, map, get scene() { return scene3d; } }; // handy for debugging in the console
