@@ -2,7 +2,7 @@ import { horizonProfile, hillTimes } from './terrain.js';
 
 // ───────────────────────── visitor counter (GoatCounter: free, anonymous, no cookies) ─────────────────────────
 // Your stats: https://<name>.goatcounter.com. Only counts and app actions are sent, never what anyone searches or where they are.
-const GOATCOUNTER = 'sunscout';   // ← your GoatCounter name, e.g. 'sunscout'
+const GOATCOUNTER = 'sunscoutapp';   // ← your GoatCounter name, e.g. 'sunscout'
 if (GOATCOUNTER && /github\.io$/.test(location.hostname)) {
   const sc = document.createElement('script'); sc.async = true; sc.src = 'https://gc.zgo.at/count.js';
   sc.dataset.goatcounter = `https://${GOATCOUNTER}.goatcounter.com/count`;
