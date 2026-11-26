@@ -1,4 +1,19 @@
 import { horizonProfile, hillTimes } from './terrain.js';
+
+// ───────────────────────── visitor counter (GoatCounter: free, anonymous, no cookies) ─────────────────────────
+// Your stats: https://<name>.goatcounter.com. Only counts and app actions are sent, never what anyone searches or where they are.
+const GOATCOUNTER = 'sunscout';   // ← your GoatCounter name, e.g. 'sunscout'
+if (GOATCOUNTER && /github\.io$/.test(location.hostname)) {
+  const sc = document.createElement('script'); sc.async = true; sc.src = 'https://gc.zgo.at/count.js';
+  sc.dataset.goatcounter = `https://${GOATCOUNTER}.goatcounter.com/count`;
+  document.head.appendChild(sc);
+}
+const tracked = new Set();
+function track(name, once = true) {   // counts an action, like "opened Street view" (once per visit by default)
+  if (!GOATCOUNTER || (once && tracked.has(name))) return; tracked.add(name);
+  const send = () => window.goatcounter?.count?.({ path: 'action/' + name, title: name, event: true });
+  window.goatcounter?.count ? send() : setTimeout(send, 3000);
+}
 // Sun Scout — main app: shared time/location state, map view, live clouds, forecast, panels.
 const $ = id => document.getElementById(id);
 const D2R = Math.PI / 180, deg = r => r / D2R;
@@ -167,12 +182,12 @@ function startCloudLoop() {
   clouds.timer = setInterval(() => { clouds.idx = (clouds.idx + 1) % clouds.frames.length; showCloudFrame(); }, clouds.idx === clouds.frames.length - 1 ? 700 : 700);
 }
 function stopCloudLoop() { clearInterval(clouds.timer); clouds.timer = null; $('cloudPlay').textContent = '▶'; }
-$('cloudBtn').onclick = () => { if (clouds.on) return cloudsOff(); if (fc.on) fcOff(); cloudsOn(); };
+$('cloudBtn').onclick = () => { track('live clouds'); if (clouds.on) return cloudsOff(); if (fc.on) fcOff(); cloudsOn(); };
 $('cloudPlay').onclick = () => clouds.timer ? (stopCloudLoop(), clouds.idx = clouds.frames.length - 1, showCloudFrame()) : startCloudLoop();
 
 // rain radar (RainViewer)
 let radar = null;
-$('radarBtn').onclick = async () => {
+$('radarBtn').onclick = async () => { track('rain radar');
   if (radar) { map.removeLayer(radar); radar = null; $('radarBtn').classList.remove('on'); return; }
   try {
     const j = await fetch('https://api.rainviewer.com/public/weather-maps.json').then(r => r.json());
@@ -265,7 +280,7 @@ function fcOff() {
   fc.on = false; $('fcBtn').classList.remove('on'); $('fcBar').classList.add('hidden');
   if (fc.layer) { map.removeLayer(fc.layer); fc.layer = null; } fc.arrows.clearLayers(); map.removeLayer(fc.arrows);
 }
-$('fcBtn').onclick = () => fc.on ? fcOff() : fcOn();
+$('fcBtn').onclick = () => { track('forecast clouds'); fc.on ? fcOff() : fcOn(); };
 
 // "Right now, from space": read the satellite cloud mask at the exact spot
 async function checkLiveSky() {
@@ -515,6 +530,7 @@ const readPlaces = () => { try { const l = JSON.parse(localStorage.getItem('suns
 const writePlaces = list => { try { localStorage.setItem('sunscout-places', JSON.stringify(list)); } catch { /* storage blocked */ } };
 const normName = s => (s || '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, ' ').trim();
 function savePlace(name, lat, lng, detail) {
+  track('saved a place', false);
   name = name.trim().slice(0, 80); if (!name) return;
   const list = readPlaces().filter(p => normName(p.name) !== normName(name));
   list.unshift({ name, lat: +lat.toFixed(6), lng: +lng.toFixed(6), detail: (detail || '').slice(0, 120) });
@@ -619,6 +635,7 @@ async function suggest(force) {
   return list;
 }
 function pick(s) {
+  track('searched a place');
   hideSugs(); $('q').value = s.name; $('q').blur();
   if (s.saveAs) savePlace(s.saveAs, s.lat, s.lng, 'From a maps link');
   if (s.areaFor) { map.setView([s.lat, s.lng], 17, { animate: false }); setLocation(s.lat, s.lng, s.areaFor + ' (area)'); startPickMode(s.areaFor, true); return; }
@@ -704,6 +721,7 @@ async function load3D(reframe) {
 }
 function setTabs(view) {
   state.view = view;
+  if (view !== 'map') track(view === 'orbit' ? 'opened 3D' : 'opened Street view');
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.dataset.view === view));
   const own3d = view === 'orbit' || view === 'street';
   $('map').classList.toggle('hidden', view !== 'map'); $('mapTools').classList.toggle('hidden', view !== 'map');
@@ -743,7 +761,7 @@ $('sunBehind').onclick = () => scene3d && scene3d.lookAtSun(true);
 $('wxBtn').onclick = () => { state.useWx = !state.useWx; $('wxBtn').classList.toggle('on', state.useWx); $('wxBtn').textContent = `☁️ Forecast clouds: ${state.useWx ? 'on' : 'off'}`; update(); };
 const shotName = () => `sun-scout-${state.date}-${fmt(selected()).replace(':', '')}.png`;
 $('treeBtn').onclick = () => { const on = !$('treeBtn').classList.contains('on'); $('treeBtn').classList.toggle('on', on); $('treeBtn').textContent = `🌳 Trees: ${on ? 'on' : 'off'}`; scene3d?.setTrees(on); };
-$('snap').onclick = () => scene3d && scene3d.snapshot(shotName());
+$('snap').onclick = () => { track('took a snapshot', false); scene3d && scene3d.snapshot(shotName()); };
 // phone walking: a thumb joystick. Push further to walk faster; let go and you ease to a stop.
 (() => {
   const pad = $('pad'), knob = $('knob'); let id = null;
@@ -855,6 +873,7 @@ $('fixImport').onchange = async e => {
 
 // ───────────────────────── phone: my location, install, offline ─────────────────────────
 $('locate').onclick = () => {
+  track('used my location');
   if (!navigator.geolocation) { $('place').textContent = 'This browser cannot share your location.'; return; }
   $('place').textContent = '📍 Finding you…';
   navigator.geolocation.getCurrentPosition(p => {
@@ -892,6 +911,7 @@ if ('serviceWorker' in navigator && location.protocol === 'https:') {
   }).catch(() => {});
 }
 $('appVersion').textContent = `Sun Scout ${APP_VERSION}`;
+if (standalone) track('opened the installed app');
 
 // opened from Android's Share menu (e.g. a place shared from Google Maps): search what was shared
 (() => {
