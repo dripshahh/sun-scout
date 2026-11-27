@@ -1,6 +1,6 @@
 import { horizonProfile, hillTimes } from './terrain.js';
 import { SkyCard, WeatherFX } from './fx.js';
-import { ARView } from './ar.js';
+import { startTour } from './tour.js';
 
 // ───────────────────────── visitor counter (GoatCounter: free, anonymous, no cookies) ─────────────────────────
 // Your stats: https://<name>.goatcounter.com. Only counts and app actions are sent, never what anyone searches or where they are.
@@ -646,7 +646,6 @@ function update() {
   const rm = minutesOf(t.sunrise), sm = minutesOf(t.sunset);
   sky.set({ minutes: state.minutes, alts, alt: a, cloud: w.cloud, rain: w.rain, snow: w.snow, storm: w.storm, fog: w.fog, blocked,
     rise: rm >= 0 && rm < 1440 ? rm : null, set: sm >= 0 && sm < 1440 ? sm : null, riseLbl: '🌅 ' + fmt(t.sunrise), setLbl: fmt(t.sunset) + ' 🌇', moon: { a: mo.now.a, frac: mo.ph.frac, phase: mo.ph.phase } });
-  ar.syncTime(state.minutes);
   updateFX(w);
 
   // facade
@@ -683,24 +682,6 @@ const goMoonDay = (i, full) => { if (i == null) return; state.date = dateAfter(i
 $('moonFull').onclick = () => goMoonDay(moonOfDay().full, true);
 $('moonDark').onclick = () => goMoonDay(moonOfDay().dark, false);
 
-// AR: the day's sun path over the live camera
-let arKey = '', arPaths = null;
-function arData() {
-  const key = `${state.date}|${state.lat},${state.lng}|${state.offset}`;
-  if (key !== arKey) {
-    arKey = key; const s0 = dayStartUTC(), sun = [], hours = [], t = sunTimes();
-    for (let m = 0; m <= 1440; m += 4) { const p = sunAt(new Date(s0 + m * 60000)), a = deg(p.altitude); if (a > -6.5) sun.push({ b: bearingOf(p.azimuth), a, m }); }
-    for (let h = 0; h < 24; h++) { const p = sunAt(new Date(s0 + h * 3600000)), a = deg(p.altitude); if (a > 0) hours.push({ b: bearingOf(p.azimuth), a, lbl: pad2(h) }); }
-    const dir = d => isNaN(d) ? null : bearingOf(sunAt(d).azimuth);
-    arPaths = { sun, hours, moon: moonOfDay().path.filter(p => p.a > 0),
-      rise: dir(t.sunrise) == null ? null : { b: dir(t.sunrise), lbl: '🌅 ' + fmt(t.sunrise) }, set: dir(t.sunset) == null ? null : { b: dir(t.sunset), lbl: '🌇 ' + fmt(t.sunset) } };
-  }
-  const d = selected(), p = sunAt(d), a = deg(p.altitude), mn = moonAt(d), now = new Date(), ps = sunAt(now);
-  return { ...arPaths, sunNow: a > -6.5 ? { b: bearingOf(p.azimuth), a } : null, moonNow: mn.a > 0 ? { ...mn, ico: moonPhase(d).p[0] } : null,
-    live: [{ b: bearingOf(ps.azimuth), a: deg(ps.altitude) }, moonAt(now)], hills: state.horizon?.prof || null, time: fmt(d) };
-}
-const ar = new ARView($('ar'), { data: arData, onTime: m => jumpTo(m), getTime: () => state.minutes });
-$('arBtn').onclick = () => { track('opened AR'); stopPlay(); ar.open(); };
 
 let hoursKey = '', hoursSel = -1;
 function renderHours(t, sel) {
@@ -752,12 +733,26 @@ function updateFX(w = skyWeather()) {
 }
 map.on('zoomend', () => updateFX());
 
-// first visit: a quick three-step welcome
-if (!lsGet('sunscout-welcomed')) {
-  $('welcome').classList.remove('hidden');
-  const close = () => { $('welcome').classList.add('hidden'); lsSet('sunscout-welcomed', '1'); };
-  $('welcomeGo').onclick = close; $('welcome').onclick = e => { if (e.target.id === 'welcome') close(); };
-}
+// first visit: what Sun Scout is for, then an optional step-by-step tour (replay any time with ❓)
+const TOUR = [
+  { sel: '#top .search', title: '🔎 Find your spot', text: 'Type a place, a building or an address. <b>📍</b> uses where you are now, <b>⭐</b> opens the places you saved. You can also just tap the map.' },
+  { sel: '#map', title: '🗺️ The sun on the map', before: () => { if (state.view !== 'map') switchView('map'); },
+    text: 'The <b style="color:#ffb02e">orange arc</b> is the sun\'s path today, the <b style="color:#ff7a59">red lines</b> point to sunrise and sunset. ☀️ is where the sun is at the time you picked, and the dark line is the shadow it casts. The dotted line is the moon.' },
+  { sel: '#timebar', title: '⏰ Pick any time', text: 'Drag the slider or change the date and everything updates. <b>▶</b> plays the whole day. The green <b>Now</b> means it\'s following the real clock; tap it to come back to now.' },
+  { sel: '#hero', title: '☀️ Your light at a glance', text: 'The headline tells you what the light is like. <b>Drag across the sky picture</b> to move through the day. The tiles show where the sun comes from, how high it is, how long shadows are, and how soft the light is.' },
+  { sel: '#lightCard', title: '✨ Golden and blue hour', text: 'The best light of the day. Tap a tile to jump straight to it. <b>Sunrise / sunset sky</b> guesses how colourful the sky will get from the clouds.' },
+  { sel: '#hourCard', title: '🌤️ Hour by hour', text: 'Weather for each hour. The coloured dot shows how sure the forecast is (green = all forecasts agree). <b>📡 Radar</b> tells you if it is really raining at your spot right now.' },
+  { sel: '#mapTools', title: '🛰️ Clouds and rain', before: () => { if (state.view !== 'map') switchView('map'); },
+    text: '<b>Live clouds</b> from the satellite, <b>rain radar</b>, and <b>forecast clouds</b> that move with the time slider.' },
+  { sel: '#top .tabs', title: '🏙️ 3D and Street view', text: 'See the real buildings and their shadows at that time. <b>Street</b> lets you stand there and frame the shot with a lens from 16 to 85 mm.' },
+  { sel: '.mooncard', title: '🌙 The moon', text: 'When and where the moon rises and sets, its phase, and the next full moon or darkest night for stars.' },
+  { sel: '#helpBtn', title: '🎉 You\'re all set', text: 'Tap <b>❓</b> any time to see this guide again. Now find your spot and pick a time!' },
+];
+const runTour = () => { $('welcome').classList.add('hidden'); lsSet('sunscout-welcomed', '1'); stopPlay(); track('took the tour'); startTour(TOUR, { onEnd: () => window.scrollTo({ top: 0, behavior: 'smooth' }) }); };
+if (!lsGet('sunscout-welcomed')) $('welcome').classList.remove('hidden');
+$('tourGo').onclick = runTour;
+$('welcomeSkip').onclick = () => { $('welcome').classList.add('hidden'); lsSet('sunscout-welcomed', '1'); track('skipped the tour'); };
+$('helpBtn').onclick = runTour;
 
 function onDayChange() { computeHillTimes(); sliderGradient(); buildChips(); if (scene3d) scene3d.setDay(dayStartUTC()); update(); }
 
@@ -1168,8 +1163,8 @@ $('installBtn').onclick = async () => { if (!installEvt) return; installEvt.prom
 $('installClose').onclick = () => { $('installBar').classList.add('hidden'); try { localStorage.setItem('sunscout-install-dismissed', '1'); } catch { /* no storage */ } };
 // keep the installed app up to date: look for a new version on open and whenever you come back to it,
 // and reload once when it arrives (only if an older version was running)
-const APP_VERSION = '2.0';
-const WHATS_NEW = ['Live rain radar for right now: no more rain shown when it is dry outside', 'Light drizzle is shown as 🌦️, not a downpour', 'Opens at the real time, steadier AR'];
+const APP_VERSION = '2.1';
+const WHATS_NEW = ['New: a quick guided tour. Tap ❓ next to search any time', 'Removed the AR view (it wasn\'t reliable enough)', 'Live rain radar for right now'];
 let swReg = null;
 function showUpdate() {
   const box = $('updateBar'); if (!box || !box.classList.contains('hidden')) return;
@@ -1256,4 +1251,4 @@ renderFixCount();
   const warm = () => import('./scene3d.js').catch(() => {});
   addEventListener('load', () => setTimeout(() => (window.requestIdleCallback || setTimeout)(warm, { timeout: 4000 }), 2500), { once: true });
 })();
-window.sunScout = { state, map, get scene() { return scene3d; }, ar }; // handy for debugging in the console
+window.sunScout = { state, map, get scene() { return scene3d; } }; // handy for debugging in the console

@@ -301,21 +301,7 @@ input[type=range] { accent-color:var(--sun); }
 .mom.moonm i { font-size:15px; }
 .moonnext { display:flex; flex-wrap:wrap; gap:4px 14px; margin-top:8px; font-size:13px; }
 .moonnext .link b { color:#dfe6ff; }
-.tab.artab { background:linear-gradient(135deg, rgba(255,176,46,.22), rgba(139,108,255,.22)); }
 
-.ar { position:fixed; inset:0; z-index:5000; background:#000; overflow:hidden; touch-action:none; }
-.ar video { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; opacity:0; transition:opacity .4s; }
-.ar.cam video { opacity:1; }
-.ar canvas { position:absolute; inset:0; width:100%; height:100%; }
-.artop { position:absolute; top:calc(10px + env(safe-area-inset-top)); left:10px; right:10px; display:flex; gap:8px; justify-content:space-between; }
-.artop .arclose { margin-right:auto; }
-.armsg { position:absolute; top:calc(58px + env(safe-area-inset-top)); left:50%; transform:translateX(-50%); max-width:calc(100% - 24px); background:rgba(10,12,18,.8); backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px); border:1px solid var(--line); border-radius:12px; padding:8px 12px; font-size:13px; text-align:center; pointer-events:none; }
-.arbot { position:absolute; left:10px; right:10px; bottom:calc(12px + env(safe-area-inset-bottom)); background:rgba(10,12,18,.72); backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px); border:1px solid var(--line); border-radius:14px; padding:8px 12px; }
-.arbot input { width:100%; accent-color:var(--sun); }
-.arlegend { font-size:11px; color:#c9ced8; display:flex; flex-wrap:wrap; gap:2px 6px; align-items:center; }
-.arlegend i { display:inline-block; width:14px; height:3px; border-radius:2px; margin-left:4px; }
-.arlegend .lb { background:#6ea0ff; } .arlegend .lg { background:#ff9632; } .arlegend .ly { background:#ffe28c; } .arlegend .lm { background:#c8d7ff; } .arlegend .lh { background:#78dc8c; }
-body.arOn { overflow:hidden; }
 .chips button.nowchip.live { background:var(--good); border-color:var(--good); color:#06200f; font-weight:700; }
 .chips button.nowchip.live::before { content:''; display:inline-block; width:6px; height:6px; border-radius:50%; background:#06200f; margin-right:5px; vertical-align:middle; animation:blink 1.6s infinite; }
 @keyframes blink { 50% { opacity:.25; } }
@@ -333,3 +319,25 @@ body.arOn { overflow:hidden; }
 @keyframes uin { from { opacity:0; transform:translate(-50%, -16px); } }
 @media (prefers-reduced-motion: reduce) { .update { animation:none; } }
 .confchip.live { color:#9fd0ff; }
+/* welcome + guided tour */
+.wcard .pill.hero small { font-weight:500; opacity:.75; }
+.wcard .pill.hero { display:block; margin:16px auto 4px; }
+.wskip { display:block; margin:0 auto 16px; color:var(--muted); font-size:13px; padding:8px; }
+#helpBtn { font-size:15px; }
+.tour { position:fixed; inset:0; z-index:6000; animation:fadein .25s ease-out; }
+.tour.out { opacity:0; transition:opacity .25s; }
+.tour-hole { position:fixed; border-radius:14px; box-shadow:0 0 0 9999px rgba(5,7,12,.74), 0 0 0 2px var(--sun) inset, 0 0 24px 4px rgba(255,176,46,.35);
+  transition:left .35s ease, top .35s ease, width .35s ease, height .35s ease; pointer-events:none; }
+.tour-tip { position:fixed; background:var(--panel); border:1px solid var(--sun); border-radius:16px; padding:12px 14px; box-shadow:0 16px 40px rgba(0,0,0,.6);
+  transition:top .35s ease, left .35s ease; }
+.tour-tip.in { animation:fadeup .3s ease-out; }
+.tour-tip h4 { margin:4px 0 4px; font-size:17px; }
+.tour-tip p { margin:0; font-size:13.5px; line-height:1.45; color:#d6dae2; }
+.tt-top { display:flex; justify-content:space-between; align-items:center; font-size:11.5px; color:var(--muted); }
+.tt-top .link { font-size:12.5px; color:var(--muted); padding:2px 0; }
+.tt-foot { display:flex; align-items:center; gap:8px; margin-top:12px; }
+.tt-dots { flex:1; display:flex; gap:4px; }
+.tt-dots i { width:6px; height:6px; border-radius:50%; background:var(--line); transition:background .2s, width .2s; }
+.tt-dots i.on { background:var(--sun); width:16px; border-radius:3px; }
+.tt-foot .pill { padding:8px 16px; }
+@media (prefers-reduced-motion: reduce) { .tour, .tour-tip.in { animation:none; } .tour-hole, .tour-tip { transition:none; } }

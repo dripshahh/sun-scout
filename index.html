@@ -37,13 +37,13 @@
       <button id="go">Go</button>
       <button id="locate" title="Use my location" aria-label="Use my location">📍</button>
       <button id="myPlaces" title="Your saved places" aria-label="Your saved places">⭐</button>
+      <button id="helpBtn" title="How to use Sun Scout" aria-label="How to use Sun Scout">❓</button>
       <div id="sugs" class="sugs hidden"></div>
     </div>
     <div class="tabs" role="tablist">
       <button class="tab on" data-view="map">🗺️ <span>Map</span></button>
       <button class="tab" data-view="orbit">🏙️ <span>3D</span></button>
       <button class="tab" data-view="street">🚶 <span>Street</span></button>
-      <button class="tab artab" id="arBtn" title="Hold up your phone and see the sun's path through the camera">📷 <span>AR</span></button>
     </div>
   </header>
 
@@ -124,7 +124,7 @@
       </div>
     </section>
 
-    <div class="card">
+    <div id="lightCard" class="card">
       <h2>⏰ Today's light <span class="hint2">tap to jump</span></h2>
       <div class="daybarwrap"><div id="dayBar" class="daybar"></div><div id="dayNeedle" class="needle"></div></div>
       <div class="moments">
@@ -152,7 +152,7 @@
       <div class="moonnext"><button id="moonFull" class="link"></button><button id="moonDark" class="link"></button></div>
     </div>
 
-    <div class="card">
+    <div id="hourCard" class="card">
       <div class="row between"><h2>🌤️ Hour by hour</h2><span id="wxNow" class="note"></span></div>
       <div id="hours" class="hours"></div>
       <div id="bestWindow" class="best"></div>
@@ -202,13 +202,6 @@
     </div>
   </footer>
 </div>
-<div id="ar" class="ar hidden" role="dialog" aria-label="AR sun view">
-  <video playsinline muted autoplay></video>
-  <canvas></canvas>
-  <div class="artop"><button class="pill arclose">✕ Close</button><button class="pill arzoom">🔍 1×</button><button class="pill aralign">🎯 Align</button></div>
-  <div class="armsg hidden"></div>
-  <div class="arbot"><div class="arlegend"><i class="lb"></i>blue hour <i class="lg"></i>golden <i class="ly"></i>sun path <i class="lm"></i>moon <i class="lh"></i>hills</div><input type="range" min="0" max="1439" step="1" aria-label="Time"></div>
-</div>
 <div id="updateBar" class="update hidden" role="alert">
   <div class="uico">✨</div>
   <div class="utxt"><b>A new version of Sun Scout is ready</b><span>Tap to update. It takes a second.</span></div>
@@ -224,14 +217,14 @@
   <div class="wcard">
     <div class="wsky"><div class="wsun"></div></div>
     <h3>Welcome to Sun Scout</h3>
-    <p>See where the sun will be, for any place and any time.</p>
+    <p>See where the sun, the light and the weather will be, for any place and any day, before you get there.</p>
     <div class="steps">
-      <div><i>🔎</i><b>Find your spot</b><span>Search, tap 📍 or tap the map</span></div>
-      <div><i>☀️</i><b>Slide the time</b><span>Watch the sun and shadows move</span></div>
-      <div><i>🏙️</i><b>Step inside in 3D</b><span>Real buildings, your lens</span></div>
-      <div><i>📷</i><b>Point your phone</b><span>AR shows the sun's path in the sky</span></div>
+      <div><i>🎬</i><b>Plan a shoot</b><span>Golden hour, which way the light falls, will it rain</span></div>
+      <div><i>🏠</i><b>Check a home or a site</b><span>Which walls and rooms get sun, and when</span></div>
+      <div><i>🌅</i><b>Catch a great sky</b><span>Sunrise and sunset colour, the moon, dark nights</span></div>
     </div>
-    <button id="welcomeGo" class="pill hero">Let's go</button>
+    <button id="tourGo" class="pill hero">Show me how it works <small>· 1 min</small></button>
+    <button id="welcomeSkip" class="link wskip">Skip, I'll explore on my own</button>
   </div>
 </div>
 <script type="module" src="app.js"></script>
