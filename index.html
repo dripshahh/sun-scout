@@ -43,6 +43,7 @@
       <button class="tab on" data-view="map">🗺️ <span>Map</span></button>
       <button class="tab" data-view="orbit">🏙️ <span>3D</span></button>
       <button class="tab" data-view="street">🚶 <span>Street</span></button>
+      <button class="tab artab" id="arBtn" title="Hold up your phone and see the sun's path through the camera">📷 <span>AR</span></button>
     </div>
   </header>
 
@@ -107,13 +108,13 @@
     <section id="hero" class="hero">
       <div class="skywrap">
         <canvas id="sky" aria-label="The sun's path today. Drag across it to change the time."></canvas>
-        <div class="badges"><span id="bTemp" class="badge">–</span><span id="bRain" class="badge rain hidden"></span></div>
+        <div class="badges"><span id="bTemp" class="badge">–</span><span id="bMoon" class="badge moon hidden"></span><span id="bRain" class="badge rain hidden"></span></div>
         <div id="skyHint" class="skyhint">👆 drag to change time</div>
       </div>
       <div class="herotext">
         <div id="heroTitle" class="title">–</div>
         <div id="heroSub" class="sub">–</div>
-        <div id="heroConf" class="confchip hidden"></div>
+        <div class="chiprow"><div id="heroConf" class="confchip hidden"></div><div id="heroGlow" class="glowchip hidden"></div></div>
       </div>
       <div class="tiles">
         <div class="tile"><svg viewBox="0 0 40 40" class="ico"><circle cx="20" cy="20" r="15" class="ring"/><text x="20" y="9.5" class="n">N</text><g id="dirArrow"><line x1="20" y1="20" x2="20" y2="8" class="ray"/><circle cx="20" cy="7" r="3.6" class="sundot"/></g><circle cx="20" cy="20" r="2" class="me"/></svg><b id="az">–</b><span>Sun from</span></div>
@@ -134,7 +135,21 @@
         <button class="mom rise" data-at="sunset"><i>🌇</i><b id="set">–</b><span>Sunset</span></button>
         <button class="mom blue" data-at="blueStartPM"><i>💙</i><b id="bluePM">–</b><span>Blue hour</span></button>
       </div>
+      <div class="glows">
+        <button id="glowAM" class="glow"><span class="gl">🌅 Sunrise sky</span><span class="gm"><i></i></span><b class="gv">…</b><span class="gw"></span></button>
+        <button id="glowPM" class="glow"><span class="gl">🌇 Sunset sky</span><span class="gm"><i></i></span><b class="gv">…</b><span class="gw"></span></button>
+      </div>
       <div id="hills" class="hills note">⛰️ Checking hills around you…</div>
+    </div>
+
+    <div class="card mooncard">
+      <h2>🌙 Moon</h2>
+      <div class="moonhead"><div id="moonDisc"></div><div><b id="moonName">–</b><span id="moonLit" class="note"></span><div id="moonNowTxt" class="note"></div></div></div>
+      <div class="moments two">
+        <button id="moonRiseBtn" class="mom moonm"><i>🌙⬆</i><b id="moonRise">–</b><span id="moonRiseDir">Moonrise</span></button>
+        <button id="moonSetBtn" class="mom moonm"><i>🌙⬇</i><b id="moonSet">–</b><span id="moonSetDir">Moonset</span></button>
+      </div>
+      <div class="moonnext"><button id="moonFull" class="link"></button><button id="moonDark" class="link"></button></div>
     </div>
 
     <div class="card">
@@ -187,6 +202,13 @@
     </div>
   </footer>
 </div>
+<div id="ar" class="ar hidden" role="dialog" aria-label="AR sun view">
+  <video playsinline muted autoplay></video>
+  <canvas></canvas>
+  <div class="artop"><button class="pill arclose">✕ Close</button><button class="pill arzoom">🔍 1×</button><button class="pill aralign">🎯 Align</button></div>
+  <div class="armsg hidden"></div>
+  <div class="arbot"><div class="arlegend"><i class="lb"></i>blue hour <i class="lg"></i>golden <i class="ly"></i>sun path <i class="lm"></i>moon <i class="lh"></i>hills</div><input type="range" min="0" max="1439" step="1" aria-label="Time"></div>
+</div>
 <div id="welcome" class="welcome hidden" role="dialog" aria-label="Welcome">
   <div class="wcard">
     <div class="wsky"><div class="wsun"></div></div>
@@ -196,6 +218,7 @@
       <div><i>🔎</i><b>Find your spot</b><span>Search, tap 📍 or tap the map</span></div>
       <div><i>☀️</i><b>Slide the time</b><span>Watch the sun and shadows move</span></div>
       <div><i>🏙️</i><b>Step inside in 3D</b><span>Real buildings, your lens</span></div>
+      <div><i>📷</i><b>Point your phone</b><span>AR shows the sun's path in the sky</span></div>
     </div>
     <button id="welcomeGo" class="pill hero">Let's go</button>
   </div>

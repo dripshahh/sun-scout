@@ -1,5 +1,6 @@
 import { horizonProfile, hillTimes } from './terrain.js';
 import { SkyCard, WeatherFX } from './fx.js';
+import { ARView } from './ar.js';
 
 // ───────────────────────── visitor counter (GoatCounter: free, anonymous, no cookies) ─────────────────────────
 // Your stats: https://<name>.goatcounter.com. Only counts and app actions are sent, never what anyone searches or where they are.
@@ -90,6 +91,14 @@ function drawSunOnMap() {
     L.polyline([center, sp], { color: '#ffcf6b', weight: 3, interactive: false }).addTo(sunLayer);
     L.marker(sp, { interactive: false, icon: L.divIcon({ className: '', html: '<div style="font-size:26px;transform:translate(-50%,-50%);filter:drop-shadow(0 0 6px #ffb02e)">☀️</div>' }) }).addTo(sunLayer);
   }
+  // the moon: its path (dotted), where it rises and sets, and where it is at the chosen time
+  const md = moonOfDay(), mDome = p => pointAt(p.b, R * (1 - clamp(p.a, 0, 90) / 90));
+  let seg = [];
+  const flush = () => { if (seg.length > 1) L.polyline(seg, { color: '#c9d4ff', weight: 2, opacity: .8, dashArray: '2 6', interactive: false }).addTo(sunLayer); seg = []; };
+  md.path.forEach(p => { if (p.a > 0) seg.push(mDome(p)); else flush(); }); flush();
+  [md.rise, md.set].forEach(m => { if (m != null) { const p = moonAt(new Date(start + m * 60000)); L.polyline([center, pointAt(p.b, R)], { color: '#c9d4ff', weight: 2, opacity: .75, dashArray: '6 5', interactive: false }).addTo(sunLayer); } });
+  const mn = moonAt(selected());
+  if (mn.a > 0) L.marker(mDome(mn), { interactive: false, icon: L.divIcon({ className: '', html: `<div style="font-size:20px;transform:translate(-50%,-50%);filter:drop-shadow(0 0 5px #9fb4ff)">${moonPhase(selected()).p[0]}</div>` }) }).addTo(sunLayer);
   L.circleMarker(center, { radius: 6, color: '#fff', fillColor: '#e5604d', fillOpacity: 1, weight: 2 }).addTo(sunLayer);
 }
 map.on('zoomend moveend resize', drawSunOnMap);
@@ -312,12 +321,12 @@ const wxText = c => c === 0 ? 'Clear' : c <= 2 ? 'Partly cloudy' : c === 3 ? 'Ov
 async function loadWeather() {
   $('wxNow').textContent = 'Loading forecast…';
   try {
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${state.lat.toFixed(4)}&longitude=${state.lng.toFixed(4)}&hourly=cloud_cover,cloud_cover_low,precipitation_probability,precipitation,weather_code,temperature_2m&timezone=auto&forecast_days=16`;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${state.lat.toFixed(4)}&longitude=${state.lng.toFixed(4)}&hourly=cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,precipitation_probability,precipitation,weather_code,temperature_2m&timezone=auto&forecast_days=16`;
     const j = await fetch(url).then(r => r.json());
     if (j.error) throw new Error(j.reason);
     const changed = state.offset !== j.utc_offset_seconds;
     state.weather = j; state.offset = j.utc_offset_seconds; $('wxNow').textContent = '';
-    loadModels();
+    loadModels(); loadGlow();
     if (changed) setNow();
   } catch (e) { state.weather = null; $('wxNow').textContent = 'Forecast unavailable: ' + e.message; }
   update();
@@ -380,7 +389,7 @@ function renderConfidence(t) {
 function wxAt(dayStr, hour) {
   const w = state.weather; if (!w) return null;
   const i = w.hourly.time.indexOf(`${dayStr}T${pad2(hour)}:00`); if (i < 0) return null;
-  return { cc: w.hourly.cloud_cover[i], low: w.hourly.cloud_cover_low[i], pp: w.hourly.precipitation_probability[i] ?? 0, pr: w.hourly.precipitation[i] ?? 0, code: w.hourly.weather_code[i], temp: w.hourly.temperature_2m[i] };
+  return { cc: w.hourly.cloud_cover[i], low: w.hourly.cloud_cover_low[i], pp: w.hourly.precipitation_probability[i] ?? 0, pr: w.hourly.precipitation[i] ?? 0, code: w.hourly.weather_code[i], temp: w.hourly.temperature_2m[i], mid: w.hourly.cloud_cover_mid?.[i], high: w.hourly.cloud_cover_high?.[i] };
 }
 const isRain = x => x && (x.pr > 0.2 || x.pp >= 60);
 // 0 = clear, 1 = fully overcast; drives the 3D lighting
@@ -391,6 +400,100 @@ function cloudFactor() {
   const h = state.minutes / 60, h0 = Math.floor(h), a = cf(h0); if (a == null) return 0;
   const b = h0 < 23 ? cf(h0 + 1) : null;
   return b == null ? a : a + (b - a) * (h - h0);
+}
+
+
+// ───────────────────────── sky colour at sunrise / sunset ─────────────────────────
+// Colourful skies need high or mid cloud to catch the light (a "canvas"), and a clear gap low down
+// toward the sun so the light can get under it. So we also check low cloud ~100 km toward the sunrise and sunset.
+let glowSeq = 0;
+async function loadGlow() {
+  const my = ++glowSeq; state.glow = null;
+  const t = sunTimes(), pts = [];
+  for (const d of [t.sunrise, t.sunset]) {
+    const b = isNaN(d) ? 90 : bearingOf(sunAt(d).azimuth) * D2R, km = 100;
+    pts.push([state.lat + km / 111 * Math.cos(b), state.lng + km / (111 * Math.cos(state.lat * D2R)) * Math.sin(b)]);
+  }
+  try {
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${pts.map(p => p[0].toFixed(3)).join(',')}&longitude=${pts.map(p => p[1].toFixed(3)).join(',')}&hourly=cloud_cover_low&timezone=auto&forecast_days=16`;
+    const j = await fetch(url).then(r => r.json());
+    if (my !== glowSeq || !Array.isArray(j)) return;
+    state.glow = { rise: j[0].hourly, set: j[1].hourly }; update();
+  } catch { /* the score still works from the local forecast alone */ }
+}
+function glowScore(kind) {
+  const t = sunTimes(), d = kind === 'rise' ? t.sunrise : t.sunset; if (isNaN(d)) return null;
+  const h = clamp(Math.floor(minutesOf(d) / 60), 0, 23), x = wxAt(state.date, h);
+  if (!x || x.mid == null || x.high == null) return null;
+  const fh = state.glow?.[kind], fi = fh ? fh.time.indexOf(`${state.date}T${pad2(h)}:00`) : -1, far = fi >= 0 ? fh.cloud_cover_low[fi] : null;
+  const canvas = Math.max(x.high, x.mid * 0.9) / 100, rain = isRain(x);
+  let s = canvas < 0.08 ? 0.3 : canvas <= 0.6 ? 0.45 + 0.55 * Math.min(1, (canvas - 0.08) / 0.32) : Math.max(0.3, 1 - (canvas - 0.6) * 1.7);
+  s *= 1 - 0.85 * clamp((x.low - 10) / 80, 0, 1);
+  if (far != null) s *= 1 - 0.75 * clamp((far - 15) / 70, 0, 1);
+  if (rain) s *= 0.35;
+  const pct = Math.round(clamp(s, 0, 1) * 100);
+  const [ico, word] = canvas < 0.08 && x.low < 20 && !rain ? ['🌤️', 'Clear, clean glow'] : pct >= 70 ? ['🔥', 'Fiery sky likely'] : pct >= 50 ? ['🌈', 'Good colour'] : pct >= 30 ? ['🙂', 'Some colour'] : ['☁️', 'Grey, little colour'];
+  const why = rain ? 'rain about' : x.low >= 60 ? 'thick low cloud here' : far != null && far >= 60 ? `low cloud toward the ${kind === 'rise' ? 'sunrise' : 'sunset'} blocks the light` : canvas < 0.08 ? 'no clouds to light up' : canvas > 0.85 ? 'sky fully covered' : `${Math.round(canvas * 100)}% high cloud to catch the colour`;
+  return { pct, ico, word, why, at: d };
+}
+
+// ───────────────────────── moon ─────────────────────────
+const moonAt = d => { const p = SunCalc.getMoonPosition(d, state.lat, state.lng); return { b: bearingOf(p.azimuth), a: deg(p.altitude) }; };
+const PHASES = [['🌑', 'New moon'], ['🌒', 'Waxing crescent'], ['🌓', 'First quarter'], ['🌔', 'Waxing gibbous'], ['🌕', 'Full moon'], ['🌖', 'Waning gibbous'], ['🌗', 'Last quarter'], ['🌘', 'Waning crescent']];
+const moonPhase = d => { const m = SunCalc.getMoonIllumination(d); return { frac: m.fraction, phase: m.phase, p: PHASES[Math.round(m.phase * 8) % 8] }; };
+let moonKey = '', moonDay = null;
+function moonOfDay() {   // rise / set / path for the chosen local day (cached)
+  const key = `${state.date}|${state.lat.toFixed(3)},${state.lng.toFixed(3)}|${state.offset}`;
+  if (key === moonKey) return moonDay;
+  const s0 = dayStartUTC(), path = []; let rise = null, set = null, prev = null;
+  for (let m = 0; m <= 1440; m += 10) {
+    const p = moonAt(new Date(s0 + m * 60000)); path.push({ ...p, m });
+    if (prev) {
+      const f = prev.a / (prev.a - p.a), mm = prev.m + f * 10;
+      if (prev.a < 0 && p.a >= 0 && rise == null) rise = mm;
+      if (prev.a >= 0 && p.a < 0 && set == null) set = mm;
+    }
+    prev = { a: p.a, m };
+  }
+  // next full and new moon, by daily steps from the chosen day
+  const fr = i => SunCalc.getMoonIllumination(new Date(s0 + (i * 24 + 12) * 3600000)).fraction;
+  const F = []; for (let i = -1; i <= 32; i++) F[i] = fr(i);
+  const findPeak = full => { for (let i = 0; i <= 31; i++) { const a = F[i - 1], c = F[i + 1]; if (full ? F[i] >= a && F[i] > c && F[i] > 0.9 : F[i] <= a && F[i] < c && F[i] < 0.1) return i; } return null; };
+  moonKey = key; moonDay = { rise, set, path, full: findPeak(true), dark: findPeak(false) };
+  return moonDay;
+}
+const dayLabel = i => { const [y, m, d] = state.date.split('-').map(Number), x = new Date(Date.UTC(y, m - 1, d + i)); return i === 0 ? 'tonight' : i === 1 ? 'tomorrow' : x.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' }); };
+const dateAfter = i => { const [y, m, d] = state.date.split('-').map(Number), x = new Date(Date.UTC(y, m - 1, d + i)); return x.toISOString().slice(0, 10); };
+function moonDisc(frac, phase) {   // SVG path of the lit part (northern-hemisphere view)
+  const r = 15, k = frac, rx = r * Math.abs(1 - 2 * k), sweep = k > 0.5 ? 1 : 0;
+  const d = `M0 ${-r} A${r} ${r} 0 0 1 0 ${r} A${rx.toFixed(2)} ${r} 0 0 ${sweep} 0 ${-r}Z`;
+  return `<svg viewBox="-17 -17 34 34" class="moondisc"><circle r="${r}" class="dark"/><path d="${d}" class="lit" transform="scale(${phase < 0.5 ? 1 : -1},1)"/></svg>`;
+}
+function renderMoon(d) {
+  const md = moonOfDay(), ph = moonPhase(d), now = moonAt(d);
+  $('moonDisc').innerHTML = moonDisc(ph.frac, ph.phase);
+  $('moonName').textContent = `${ph.p[1]}`; $('moonLit').textContent = `${Math.round(ph.frac * 100)}% lit`;
+  const at = m => m == null ? null : moonAt(new Date(dayStartUTC() + m * 60000));
+  const r = at(md.rise), s = at(md.set);
+  $('moonRise').textContent = md.rise != null ? fmtMin(md.rise) : 'none'; $('moonRiseDir').textContent = r ? `${compass(r.b)} ${Math.round(r.b)}°` : 'not today';
+  $('moonSet').textContent = md.set != null ? fmtMin(md.set) : 'none'; $('moonSetDir').textContent = s ? `${compass(s.b)} ${Math.round(s.b)}°` : 'not today';
+  $('moonNowTxt').textContent = now.a > 0 ? `At ${fmt(d)}: up in the ${compass(now.b)} (${Math.round(now.b)}°), ${Math.round(now.a)}° high` : `At ${fmt(d)}: below the horizon`;
+  $('moonFull').innerHTML = md.full != null ? `🌕 Full moon <b>${dayLabel(md.full)}</b>` : '';
+  $('moonDark').innerHTML = md.dark != null ? `🌑 Darkest skies <b>${dayLabel(md.dark)}</b>` : '';
+  $('moonFull').classList.toggle('hidden', md.full == null); $('moonDark').classList.toggle('hidden', md.dark == null);
+  return { ph, now, md };
+}
+function renderGlow() {
+  for (const k of ['rise', 'set']) {
+    const el = $(k === 'rise' ? 'glowAM' : 'glowPM'), g = glowScore(k);
+    if (!g) { el.classList.add('nofc'); el.querySelector('.gv').textContent = state.weather ? 'No forecast' : '…'; el.querySelector('.gw').textContent = ''; el.querySelector('.gm i').style.width = '0%'; el.style.removeProperty('--glow'); continue; }
+    el.classList.remove('nofc');
+    el.querySelector('.gv').textContent = `${g.ico} ${g.word}`;
+    el.querySelector('.gw').textContent = g.why;
+    el.querySelector('.gm i').style.width = Math.max(6, g.pct) + '%';
+    el.style.setProperty('--glow', g.pct >= 70 ? '#ff4f7b' : g.pct >= 50 ? '#ff8a3d' : g.pct >= 30 ? '#ffc04d' : '#7d8594');
+    el.title = `Sky colour score ${g.pct}/100`;
+  }
 }
 
 // ───────────────────────── panels ─────────────────────────
@@ -479,7 +582,12 @@ function update() {
   const L = a > 0 && (blocked || (x && (x.low >= 70 || isRain(x)))) ? [0, '☁️', 'Soft'] : lightOf(a);
   $('quality').textContent = L[2]; $('lightIco').textContent = L[1];
   if (blocked) { $('shadow').textContent = '—'; $('shadowBar').setAttribute('width', 0); }
-  const [title, sub, bg] = score(a, x, blocked);
+  const mo = renderMoon(d); renderGlow();
+  let [title, sub, bg] = score(a, x, blocked);
+  if (a < -6 && mo.now.a > 5) sub = mo.ph.frac > 0.6 ? `${mo.ph.p[0]} Bright moonlight from the ${compass(mo.now.b)}. Try a moonlit shot.` : `${mo.ph.p[0]} A thin moon is up in the ${compass(mo.now.b)}.`;
+  else if (a < -6 && mo.ph.frac < 0.15) sub = '🌑 Dark, moonless sky: good for stars.';
+  const gk = a > -7 && a < 12 ? (state.minutes < 720 ? 'rise' : 'set') : null, gs = gk && glowScore(gk);
+  $('heroGlow').classList.toggle('hidden', !gs); if (gs) { $('heroGlow').textContent = `${gs.ico} ${gs.word}`; $('heroGlow').style.setProperty('--glow', gs.pct >= 70 ? '#ff4f7b' : gs.pct >= 50 ? '#ff8a3d' : gs.pct >= 30 ? '#c98a1c' : '#5d6472'); }
   const conf = renderConfidence(t);
   $('heroTitle').textContent = title; $('heroSub').textContent = sub;
   $('hero').style.setProperty('--tint', bg);
@@ -487,6 +595,7 @@ function update() {
   if (!conf || a < -6) cc.classList.add('hidden');
   else { cc.classList.remove('hidden'); cc.className = 'confchip ' + (conf.agree === conf.total && conf.total > 1 ? 'c3' : conf.agree >= 2 ? 'c2' : 'c1'); cc.textContent = conf.agree === conf.total && conf.total > 1 ? '✓ Forecasts agree' : conf.agree >= 2 ? `${conf.agree} of ${conf.total} forecasts agree` : 'Forecasts disagree: have a backup'; }
   $('bTemp').textContent = x ? `${wxIcon(x, a > 0)} ${Math.round(x.temp)}°` : '–';
+  $('bMoon').classList.toggle('hidden', mo.now.a <= 0); $('bMoon').textContent = `${mo.ph.p[0]} ${Math.round(mo.ph.frac * 100)}%`;
   $('bRain').classList.toggle('hidden', !x || x.pp < 20); if (x) $('bRain').textContent = `💧 ${x.pp}%`;
 
   // the animated sky + weather over the map / 3D
@@ -494,7 +603,8 @@ function update() {
   for (let m = 0; m <= 1440; m += 10) alts.push(deg(sunAt(new Date(s0 + m * 60000)).altitude));
   const rm = minutesOf(t.sunrise), sm = minutesOf(t.sunset);
   sky.set({ minutes: state.minutes, alts, alt: a, cloud: w.cloud, rain: w.rain, snow: w.snow, storm: w.storm, fog: w.fog, blocked,
-    rise: rm >= 0 && rm < 1440 ? rm : null, set: sm >= 0 && sm < 1440 ? sm : null, riseLbl: '🌅 ' + fmt(t.sunrise), setLbl: fmt(t.sunset) + ' 🌇' });
+    rise: rm >= 0 && rm < 1440 ? rm : null, set: sm >= 0 && sm < 1440 ? sm : null, riseLbl: '🌅 ' + fmt(t.sunrise), setLbl: fmt(t.sunset) + ' 🌇', moon: { a: mo.now.a, frac: mo.ph.frac, phase: mo.ph.phase } });
+  ar.syncTime(state.minutes);
   updateFX(w);
 
   // facade
@@ -523,6 +633,32 @@ const sky = new SkyCard($('sky'), { onScrub: m => { jumpTo(m); if (!lsGet('sunsc
 if (lsGet('sunscout-skyhint')) $('skyHint').classList.add('gone');
 document.querySelectorAll('.mom').forEach(m => m.onclick = () => { const v = sunTimes()[m.dataset.at]; if (!isNaN(v)) jumpTo(minutesOf(v) + 1); });
 $('bestWindow').onclick = () => { if (state.best != null) jumpTo(state.best * 60); };
+$('glowAM').onclick = () => { const v = sunTimes().sunrise; if (!isNaN(v)) jumpTo(minutesOf(v) - 10); };
+$('glowPM').onclick = () => { const v = sunTimes().sunset; if (!isNaN(v)) jumpTo(minutesOf(v) + 5); };
+$('moonRiseBtn').onclick = () => { const m = moonOfDay().rise; if (m != null) jumpTo(m + 5); };
+$('moonSetBtn').onclick = () => { const m = moonOfDay().set; if (m != null) jumpTo(m - 5); };
+const goMoonDay = (i, full) => { if (i == null) return; state.date = dateAfter(i); $('date').value = state.date; onDayChange(); const md = moonOfDay(); jumpTo(full ? (md.rise ?? 1260) + 10 : 1380); toast(full ? '🌕 Jumped to the full moon, just after moonrise' : '🌑 Jumped to the darkest night (no moon)'); };
+$('moonFull').onclick = () => goMoonDay(moonOfDay().full, true);
+$('moonDark').onclick = () => goMoonDay(moonOfDay().dark, false);
+
+// AR: the day's sun path over the live camera
+let arKey = '', arPaths = null;
+function arData() {
+  const key = `${state.date}|${state.lat},${state.lng}|${state.offset}`;
+  if (key !== arKey) {
+    arKey = key; const s0 = dayStartUTC(), sun = [], hours = [], t = sunTimes();
+    for (let m = 0; m <= 1440; m += 4) { const p = sunAt(new Date(s0 + m * 60000)), a = deg(p.altitude); if (a > -6.5) sun.push({ b: bearingOf(p.azimuth), a, m }); }
+    for (let h = 0; h < 24; h++) { const p = sunAt(new Date(s0 + h * 3600000)), a = deg(p.altitude); if (a > 0) hours.push({ b: bearingOf(p.azimuth), a, lbl: pad2(h) }); }
+    const dir = d => isNaN(d) ? null : bearingOf(sunAt(d).azimuth);
+    arPaths = { sun, hours, moon: moonOfDay().path.filter(p => p.a > 0),
+      rise: dir(t.sunrise) == null ? null : { b: dir(t.sunrise), lbl: '🌅 ' + fmt(t.sunrise) }, set: dir(t.sunset) == null ? null : { b: dir(t.sunset), lbl: '🌇 ' + fmt(t.sunset) } };
+  }
+  const d = selected(), p = sunAt(d), a = deg(p.altitude), mn = moonAt(d), now = new Date(), ps = sunAt(now);
+  return { ...arPaths, sunNow: a > -6.5 ? { b: bearingOf(p.azimuth), a } : null, moonNow: mn.a > 0 ? { ...mn, ico: moonPhase(d).p[0] } : null,
+    live: [{ b: bearingOf(ps.azimuth), a: deg(ps.altitude) }, moonAt(now)], hills: state.horizon?.prof || null, time: fmt(d) };
+}
+const ar = new ARView($('ar'), { data: arData, onTime: m => jumpTo(m), getTime: () => state.minutes });
+$('arBtn').onclick = () => { track('opened AR'); stopPlay(); ar.open(); };
 
 let hoursKey = '', hoursSel = -1;
 function renderHours(t, sel) {
@@ -841,7 +977,7 @@ async function switchView(view) {
     scene3d.setMode(view);
   } catch (e) { console.error(e); status3D('Could not start 3D: ' + e.message); }
 }
-document.querySelectorAll('.tab').forEach(t => t.onclick = () => switchView(t.dataset.view));
+document.querySelectorAll('.tab[data-view]').forEach(t => t.onclick = () => switchView(t.dataset.view));
 document.querySelectorAll('#sceneTools .lens button').forEach(b => b.onclick = () => { scene3d?.setLens(Number(b.dataset.mm)); scene3d?.onLensChange(Number(b.dataset.mm)); });
 $('bestView').onclick = () => scene3d && scene3d.bestView();
 // the swipeable button row fades at its right edge until you reach the end
@@ -989,7 +1125,7 @@ $('installBtn').onclick = async () => { if (!installEvt) return; installEvt.prom
 $('installClose').onclick = () => { $('installBar').classList.add('hidden'); try { localStorage.setItem('sunscout-install-dismissed', '1'); } catch { /* no storage */ } };
 // keep the installed app up to date: look for a new version on open and whenever you come back to it,
 // and reload once when it arrives (only if an older version was running)
-const APP_VERSION = 'v7';
+const APP_VERSION = 'v8';
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
   const hadController = !!navigator.serviceWorker.controller;
   let reloaded = false;
@@ -1027,4 +1163,4 @@ renderFixCount();
   const warm = () => import('./scene3d.js').catch(() => {});
   addEventListener('load', () => setTimeout(() => (window.requestIdleCallback || setTimeout)(warm, { timeout: 4000 }), 2500), { once: true });
 })();
-window.sunScout = { state, map, get scene() { return scene3d; } }; // handy for debugging in the console
+window.sunScout = { state, map, get scene() { return scene3d; }, ar }; // handy for debugging in the console

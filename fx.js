@@ -87,11 +87,19 @@ export class SkyCard {
       g.fillStyle = `rgba(255,255,255,${starA * (0.55 + 0.45 * Math.sin(t / 700 + s.p))})`;
       g.beginPath(); g.arc(s.x * W, s.y * hy, s.r, 0, 7); g.fill();
     }
-    // moon (decorative) once it's properly dark
-    if (d.alt < -6) {
-      const mx = W * 0.7, my = 30, a = clamp((-d.alt - 6) / 6, 0, 1) * (1 - d.cloud * 0.6);
-      g.fillStyle = `rgba(240,240,225,${a})`; g.beginPath(); g.arc(mx, my, 9, 0, 7); g.fill();
-      g.fillStyle = rgb(sky.top, a); g.beginPath(); g.arc(mx + 4, my - 3, 8, 0, 7); g.fill();
+    // the real moon: its phase, and higher in the card the higher it is in the sky (faint by day)
+    const mo = d.moon;
+    if (mo && mo.a > 0 && mo.frac > 0.03) {
+      const sxm = X(d.minutes), mx = sxm > W * 0.5 ? W * 0.27 : W * 0.7, my = hy - 14 - (hy - 34) * Math.min(1, mo.a / 60), r = 8.5;
+      const a = (d.alt < -6 ? 1 : d.alt < 0 ? 0.75 : 0.4) * (1 - d.cloud * 0.6);
+      g.fillStyle = `rgba(255,255,255,${0.08 * a})`; g.beginPath(); g.arc(mx, my, r + 7, 0, 7); g.fill();
+      g.fillStyle = `rgba(60,64,80,${0.35 * a})`; g.beginPath(); g.arc(mx, my, r, 0, 7); g.fill();
+      // lit part: half disc + terminator ellipse (right side lit while waxing)
+      const side = mo.phase < 0.5 ? 1 : -1, rx = r * Math.abs(1 - 2 * mo.frac);
+      g.fillStyle = `rgba(242,240,226,${a})`; g.beginPath();
+      g.ellipse(mx, my, r, r, 0, -Math.PI / 2, Math.PI / 2, side < 0);
+      g.ellipse(mx, my, rx, r, 0, Math.PI / 2, -Math.PI / 2, (mo.frac < 0.5) === (side > 0));
+      g.fill();
     }
 
     // the sun's path today: bright above the horizon, faint below
