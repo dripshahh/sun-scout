@@ -422,3 +422,4 @@ body.lockscroll { overflow:hidden; }
 @media (prefers-reduced-motion: reduce) { .findme.pulse { animation:none; } }
 #mapTools .pill { white-space:nowrap; }
 @media (max-width:400px) { .findme span { display:none; } .findme { padding:9px 11px; } #mapTools { right:58px; } }
+.placebtns { display:flex; gap:12px; flex:none; }

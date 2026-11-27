@@ -37,7 +37,16 @@ const INDIA = { lat: 21.1466, lng: 79.0889, bounds: [[7.5, 68.5], [35.0, 97.0]] 
 let resumeAfterUpdate = false;
 try { resumeAfterUpdate = sessionStorage.getItem('sunscout-skip-landing') === '1'; } catch { /* private mode */ }
 Object.assign(state, { lat: INDIA.lat, lng: INDIA.lng, label: 'India', noSpot: true });
-if (resumeAfterUpdate) try { const last = JSON.parse(localStorage.getItem('sunscout-last') || 'null'); if (last && isFinite(last.lat) && isFinite(last.lng)) Object.assign(state, { lat: last.lat, lng: last.lng, label: last.label || '', noSpot: false }); } catch { /* no storage */ }
+// a "Share this spot" link: ?at=lat,lng&n=name&d=YYYY-MM-DD&t=HH:MM&v=orbit|street
+const shared = (() => {
+  const q = new URLSearchParams(location.search), at = (q.get('at') || '').split(',').map(Number);
+  if (at.length !== 2 || !at.every(Number.isFinite) || Math.abs(at[0]) > 90 || Math.abs(at[1]) > 180) return null;
+  const d = q.get('d'), t = q.get('t'), v = q.get('v');
+  return { lat: at[0], lng: at[1], name: (q.get('n') || '').trim().slice(0, 120),
+    date: /^\d{4}-\d{2}-\d{2}$/.test(d || '') ? d : null, time: /^\d{1,2}:\d{2}$/.test(t || '') ? t : null, view: ['orbit', 'street'].includes(v) ? v : null };
+})();
+if (shared) { Object.assign(state, { lat: shared.lat, lng: shared.lng, label: shared.name || 'Shared spot', noSpot: false }); history.replaceState(null, '', location.pathname); }
+else if (resumeAfterUpdate) try { const last = JSON.parse(localStorage.getItem('sunscout-last') || 'null'); if (last && isFinite(last.lat) && isFinite(last.lng)) Object.assign(state, { lat: last.lat, lng: last.lng, label: last.label || '', noSpot: false }); } catch { /* no storage */ }
 
 // ───────────────────────── time helpers (everything shown in the location's local time) ─────────────────────────
 const localParts = d => { const x = new Date(d.getTime() + state.offset * 1000); return { y: x.getUTCFullYear(), m: x.getUTCMonth(), d: x.getUTCDate(), h: x.getUTCHours(), min: x.getUTCMinutes() }; };
@@ -794,7 +803,7 @@ function onDayChange() { computeHillTimes(); sliderGradient(); buildChips(); if 
 // ───────────────────────── location ─────────────────────────
 function setLocation(lat, lng, label, keepHint) {
   if (!keepHint) state.kindHint = null;
-  state.lat = lat; state.lng = lng; state.label = label; state.noSpot = false; $('findMe').classList.remove('pulse'); $('savePlace').classList.remove('hidden');
+  state.lat = lat; state.lng = lng; state.label = label; state.noSpot = false; $('findMe').classList.remove('pulse'); $('savePlace').classList.remove('hidden'); $('shareSpot').classList.remove('hidden');
   $('place').textContent = '📍 ' + (label || `${lat.toFixed(5)}, ${lng.toFixed(5)}`);
   try { localStorage.setItem('sunscout-last', JSON.stringify({ lat, lng, label })); } catch { /* no storage */ }
   sliderGradient(); buildChips(); update();
@@ -1203,9 +1212,26 @@ async function nameHere(lat, lng, here = true) {
   } catch { /* keep "Your location" */ }
 }
 $('locate').onclick = () => { track('used my location'); askLocation(true); };
+const dayWord = ds => new Date(ds + 'T12:00:00Z').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
+async function shareSpot() {
+  if (state.noSpot) return toast('📍 Pick a spot first, then share it.');
+  const q = new URLSearchParams({ at: `${state.lat.toFixed(5)},${state.lng.toFixed(5)}` });
+  if (state.label && state.label !== 'Your location' && state.label !== 'Shared spot') q.set('n', state.label);
+  if (!state.live) { q.set('d', state.date); q.set('t', fmtMin(state.minutes)); }   // "now" stays "now" for whoever opens it
+  if (state.view !== 'map') q.set('v', state.view);
+  const url = `${location.origin}${location.pathname}?${q.toString().replace(/%2C/g, ',').replace(/%3A/g, ':')}`;
+  const text = `☀️ ${state.label || 'This spot'}${state.live ? '' : ` · ${dayWord(state.date)}, ${fmtMin(state.minutes)}`} · ${$('heroTitle').textContent}`;
+  track('shared a spot');
+  if (navigator.share) { try { await navigator.share({ title: 'Sun Scout', text, url }); } catch { /* closed the share sheet */ } return; }
+  const all = `${text}\n${url}`;
+  try { await navigator.clipboard.writeText(all); }
+  catch { const ta = document.createElement('textarea'); ta.value = all; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); } catch { /* nothing more to try */ } ta.remove(); }
+  toast(state.live ? '🔗 Link copied. It opens this spot at the time they open it.' : `🔗 Link copied, with ${dayWord(state.date)} ${fmtMin(state.minutes)}. Paste it in WhatsApp or anywhere.`, 5000);
+}
+$('shareSpot').onclick = shareSpot; $('shareSpot3d').onclick = shareSpot;
 $('findMe').onclick = () => { track('find me'); askLocation(true); };
 $('findMe').classList.toggle('pulse', !!state.noSpot);
-$('savePlace').classList.toggle('hidden', !!state.noSpot);
+$('savePlace').classList.toggle('hidden', !!state.noSpot); $('shareSpot').classList.toggle('hidden', !!state.noSpot);
 // on open: go to where you are if you've allowed it; otherwise ask once, nicely (and not again for 3 days if you say not now)
 async function askLocation(force) {
   let st = 'prompt';
@@ -1237,8 +1263,8 @@ $('installBtn').onclick = async () => { if (!installEvt) return; installEvt.prom
 $('installClose').onclick = () => { $('installBar').classList.add('hidden'); try { localStorage.setItem('sunscout-install-dismissed', '1'); } catch { /* no storage */ } };
 // keep the installed app up to date: look for a new version on open and whenever you come back to it,
 // and reload once when it arrives (only if an older version was running)
-const APP_VERSION = '2.5';
-const WHATS_NEW = ['New 📍 Find me button: flies straight to where you are', 'Without your location, the app now opens on a satellite view of India', 'A redesigned welcome page for phones and computers'];
+const APP_VERSION = '2.6';
+const WHATS_NEW = ['New 🔗 Share: send your crew a link to the exact spot, date and time', 'Tap 📍 Find me to fly straight to where you are', 'Without your location, the app opens on a satellite view of India'];
 let swReg = null;
 function showUpdate() {
   const box = $('updateBar'); if (!box || !box.classList.contains('hidden')) return;
@@ -1315,6 +1341,11 @@ addEventListener('pageshow', e => { if (e.persisted) { state.live = true; follow
 // ───────────────────────── start ─────────────────────────
 $('place').textContent = placeText();
 setNow();
+if (shared?.date || shared?.time) {
+  state.live = false;
+  if (shared.date) { state.date = shared.date; $('date').value = shared.date; }
+  if (shared.time) { const [h, m] = shared.time.split(':').map(Number); state.minutes = clamp(h * 60 + m, 0, 1439); $('t').value = state.minutes; }
+}
 onDayChange();
 loadWeather();
 checkLiveSky();
@@ -1351,6 +1382,10 @@ document.querySelectorAll('#landing [data-tour]').forEach(b => b.onclick = async
   hideLanding(); lsSet('sunscout-welcomed', '1'); track(tour ? 'landing: tour' : 'landing: open app');
   window.scrollTo(0, 0);
   if (!landingDone && !openedWithLink) await askLocation();   // a shared place stays on that place
+  if (!landingDone && shared) {
+    toast(`🔗 Shared with you: ${shared.name || 'a spot'}${shared.time ? ` · ${dayWord(state.date)} ${fmtMin(state.minutes)}` : ''}`, 5000);
+    if (shared.view) switchView(shared.view);
+  }
   landingDone = true;
   if (tour) runTour();
 });
