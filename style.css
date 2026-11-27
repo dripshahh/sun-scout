@@ -420,3 +420,5 @@ body.lockscroll { overflow:hidden; }
 #mapTools { right:132px; }
 @media (max-width:820px) { .findme { top:8px; right:8px; padding:8px 12px; font-size:13px; } #mapTools { right:112px; } }
 @media (prefers-reduced-motion: reduce) { .findme.pulse { animation:none; } }
+#mapTools .pill { white-space:nowrap; }
+@media (max-width:400px) { .findme span { display:none; } .findme { padding:9px 11px; } #mapTools { right:58px; } }
