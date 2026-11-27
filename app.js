@@ -1220,8 +1220,8 @@ $('installBtn').onclick = async () => { if (!installEvt) return; installEvt.prom
 $('installClose').onclick = () => { $('installBar').classList.add('hidden'); try { localStorage.setItem('sunscout-install-dismissed', '1'); } catch { /* no storage */ } };
 // keep the installed app up to date: look for a new version on open and whenever you come back to it,
 // and reload once when it arrives (only if an older version was running)
-const APP_VERSION = '2.3';
-const WHATS_NEW = ['Sun Scout now opens with its welcome page every time', 'Opens right where you are (after you allow location)', 'More accurate weather: three forecasts blended, plus live satellite and radar'];
+const APP_VERSION = '2.4';
+const WHATS_NEW = ['A redesigned welcome page that looks great on phones, tablets and computers', 'Opens right where you are (after you allow location)', 'More accurate weather: three forecasts blended, plus live satellite and radar'];
 let swReg = null;
 function showUpdate() {
   const box = $('updateBar'); if (!box || !box.classList.contains('hidden')) return;

@@ -348,14 +348,16 @@ body.lockscroll { overflow:hidden; }
 .lhero canvas { position:absolute; left:0; top:0; width:100%; height:64%; }
 .lhero::after { content:''; position:absolute; inset:0; background:linear-gradient(180deg, rgba(11,13,18,0) 35%, rgba(11,13,18,.55) 62%, #0b0d12 100%); pointer-events:none; }
 .lhero-in { position:relative; z-index:1; width:100%; max-width:720px; margin:0 auto; padding:0 20px 34px; padding-bottom:calc(34px + env(safe-area-inset-bottom)); }
-.lbrand { position:absolute; z-index:2; top:calc(14px + env(safe-area-inset-top)); left:18px; font-weight:800; font-size:16px; text-shadow:0 1px 8px rgba(0,0,0,.5); }
+.lnav { position:absolute; z-index:3; top:calc(12px + env(safe-area-inset-top)); left:0; right:0; max-width:1120px; margin:0 auto; padding:0 16px; display:flex; align-items:center; justify-content:space-between; }
+.lbrand { font-weight:800; font-size:17px; text-shadow:0 1px 8px rgba(0,0,0,.5); }
+.lnavgo { background:rgba(10,12,18,.45); backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); border-color:rgba(255,255,255,.28); font-weight:700; padding:8px 14px; }
 .lhero h1 { font-size:clamp(32px, 8vw, 54px); line-height:1.05; letter-spacing:-.02em; margin:0 0 12px; text-shadow:0 2px 18px rgba(0,0,0,.45); animation:fadeup .6s ease-out; }
 .lhero p { font-size:clamp(15px, 3.8vw, 18px); color:#d7dbe4; margin:0 0 20px; max-width:520px; }
 .lcta { display:flex; flex-wrap:wrap; gap:10px; }
 .lcta .pill { padding:13px 22px; font-size:15.5px; }
 .lcta .ltour { background:rgba(255,255,255,.1); border-color:rgba(255,255,255,.25); }
 .lfree { margin-top:12px; color:var(--muted); font-size:13px; }
-.lclock { position:absolute; right:20px; bottom:calc(100% + 10px); font-size:12.5px; font-weight:700; background:rgba(10,12,18,.5); backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px); padding:4px 10px; border-radius:999px; font-variant-numeric:tabular-nums; }
+.lclock { display:inline-block; margin-bottom:14px; font-size:12.5px; font-weight:700; background:rgba(10,12,18,.5); backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px); padding:4px 10px; border-radius:999px; font-variant-numeric:tabular-nums; }
 .lsec { max-width:720px; margin:0 auto; padding:26px 20px 6px; }
 .lsec h2 { font-size:20px; margin:0 0 14px; letter-spacing:-.01em; }
 .lfeat { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:10px; }
@@ -383,3 +385,30 @@ body.lockscroll { overflow:hidden; }
 .lockcard .pill.hero { display:block; margin:16px auto 4px; padding:12px 30px; }
 @media (max-width:560px) { .lhow { grid-template-columns:1fr; } .lhow div { flex-direction:row; align-items:center; gap:10px; text-align:left; } .lhow b { margin:0; flex:none; } .lhow small { margin-left:auto; } }
 @media (prefers-reduced-motion: reduce) { .locpin span, .locpin::after, .lhero h1 { animation:none; } }
+
+/* landing: tablets and computers */
+.lfeat div { transition:transform .2s ease, border-color .2s ease; }
+@media (hover:hover) { .lfeat div:hover { transform:translateY(-3px); border-color:rgba(255,176,46,.45); } }
+@media (min-width:760px) {
+  .lhero { min-height:100vh; min-height:100dvh; }
+  .lhero canvas { height:68%; }
+  .lhero-in { max-width:900px; text-align:center; padding-bottom:64px; }
+  .lhero h1 { font-size:clamp(48px, 6.2vw, 76px); margin-bottom:16px; }
+  .lhero p { font-size:19px; margin:0 auto 26px; max-width:600px; }
+  .lcta { justify-content:center; }
+  .lcta .pill { padding:15px 28px; font-size:16.5px; }
+  .lsec { max-width:1120px; padding:48px 24px 8px; }
+  .lsec h2 { font-size:30px; text-align:center; margin-bottom:24px; }
+  .lfeat { grid-template-columns:repeat(3, 1fr); gap:16px; }
+  .lfeat div { padding:20px; gap:6px; }
+  .lfeat i { font-size:32px; }
+  .lfeat b { font-size:17px; } .lfeat span { font-size:14px; }
+  .lfor { justify-content:center; gap:12px; }
+  .lfor div { padding:11px 18px; font-size:15px; }
+  .lhow { max-width:900px; margin:0 auto; gap:16px; }
+  .lhow div { padding:22px 12px; }
+  .lhow span { font-size:16px; } .lhow small { font-size:13px; }
+  .lend { padding:56px 24px calc(56px + env(safe-area-inset-bottom)); }
+  .lend .pill { padding:15px 40px; font-size:17px; }
+}
+@media (max-width:420px) { .lnavgo { padding:7px 12px; font-size:13px; } }
