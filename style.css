@@ -332,3 +332,4 @@ body.arOn { overflow:hidden; }
 .update.news ul { margin:4px 0 0; padding-left:18px; color:#c9ced8; font-size:12.5px; }
 @keyframes uin { from { opacity:0; transform:translate(-50%, -16px); } }
 @media (prefers-reduced-motion: reduce) { .update { animation:none; } }
+.confchip.live { color:#9fd0ff; }

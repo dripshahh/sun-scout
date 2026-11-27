@@ -319,7 +319,7 @@ async function checkLiveSky() {
 $('liveRefresh').onclick = () => { clouds.latest = null; checkLiveSky(); };
 
 // ───────────────────────── forecast (Open-Meteo) ─────────────────────────
-const wxText = c => c === 0 ? 'Clear' : c <= 2 ? 'Partly cloudy' : c === 3 ? 'Overcast' : c <= 48 ? 'Fog' : c <= 67 ? 'Rain' : c <= 77 ? 'Snow' : c <= 82 ? 'Showers' : 'Thunderstorm';
+const wxText = c => c === 0 ? 'Clear' : c <= 2 ? 'Partly cloudy' : c === 3 ? 'Overcast' : c <= 48 ? 'Fog' : c <= 57 ? 'Drizzle' : c <= 67 ? 'Rain' : c <= 77 ? 'Snow' : c <= 82 ? 'Showers' : 'Thunderstorm';
 async function loadWeather() {
   $('wxNow').textContent = 'Loading forecast…';
   try {
@@ -391,9 +391,41 @@ function renderConfidence(t) {
 function wxAt(dayStr, hour) {
   const w = state.weather; if (!w) return null;
   const i = w.hourly.time.indexOf(`${dayStr}T${pad2(hour)}:00`); if (i < 0) return null;
-  return { cc: w.hourly.cloud_cover[i], low: w.hourly.cloud_cover_low[i], pp: w.hourly.precipitation_probability[i] ?? 0, pr: w.hourly.precipitation[i] ?? 0, code: w.hourly.weather_code[i], temp: w.hourly.temperature_2m[i], mid: w.hourly.cloud_cover_mid?.[i], high: w.hourly.cloud_cover_high?.[i] };
+  return liveFix({ cc: w.hourly.cloud_cover[i], low: w.hourly.cloud_cover_low[i], pp: w.hourly.precipitation_probability[i] ?? 0, pr: w.hourly.precipitation[i] ?? 0, code: w.hourly.weather_code[i], temp: w.hourly.temperature_2m[i], mid: w.hourly.cloud_cover_mid?.[i], high: w.hourly.cloud_cover_high?.[i] }, dayStr, hour);
 }
-const isRain = x => x && (x.pr > 0.2 || x.pp >= 60);
+// Rain = a real amount is forecast, not just a model's trace of drizzle (those often never reach the ground in the tropics)
+const isRain = x => x && (x.pr >= 0.5 || (x.pp >= 60 && x.pr >= 0.3) || (x.pp >= 75 && x.pr >= 0.1));
+const maybeDrizzle = x => x && !isRain(x) && x.pr >= 0.1 && x.pp >= 35;
+
+// ── live rain radar at your spot (RainViewer, free). For the current hour it beats any forecast:
+//    the radar sees the rain that is actually falling. Used wherever there is radar coverage (most of India, Europe, US…).
+const live = { time: 0, covered: false, rain: false, near: false, amt: 0, lat: null, lng: null };
+let liveSeq = 0;
+const todayStr = () => { const p = localParts(new Date()); return `${p.y}-${pad2(p.m + 1)}-${pad2(p.d)}`; };
+async function loadLiveRain() {
+  const my = ++liveSeq, lat = state.lat, lng = state.lng;
+  try {
+    const j = await fetch('https://api.rainviewer.com/public/weather-maps.json').then(r => r.json());
+    const last = j.radar?.past?.at(-1); if (!last) return;
+    const z = 7, n = 2 ** z, xf = (lng + 180) / 360 * n, yf = (1 - Math.log(Math.tan(lat * D2R) + 1 / Math.cos(lat * D2R)) / Math.PI) / 2 * n;
+    const tx = Math.floor(xf), ty = Math.floor(yf), px = Math.floor((xf - tx) * 256), py = Math.floor((yf - ty) * 256);
+    const pixels = async url => { const img = new Image(); img.crossOrigin = 'anonymous'; img.src = url; await img.decode(); const c = document.createElement('canvas'); c.width = c.height = 256; const g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(img, 0, 0); return g; };
+    // (a spot near a tile edge only looks at the part of the window inside this tile: fine for a yes/no)
+    const count = (g, r) => { const x0 = clamp(px - r, 0, 255), y0 = clamp(py - r, 0, 255), w = clamp(px + r + 1, 1, 256) - x0, h = clamp(py + r + 1, 1, 256) - y0, d = g.getImageData(x0, y0, w, h).data; let k = 0; for (let i = 3; i < d.length; i += 4) if (d[i] > 0) k++; return k; };
+    const [cov, rad] = await Promise.all([pixels(`${j.host}/v2/coverage/0/256/${z}/${tx}/${ty}/0/0_0.png`), pixels(`${j.host}${last.path}/256/${z}/${tx}/${ty}/2/1_1.png`)]);
+    if (my !== liveSeq) return;
+    const here = count(rad, 2), near = count(rad, 12);   // ≈ within 2–3 km, and within ~15 km
+    Object.assign(live, { time: last.time * 1000, covered: cov.getImageData(px, py, 1, 1).data[3] === 0, rain: here >= 3, near: near >= 6, amt: here / 25, lat, lng });
+    update();
+  } catch { /* no radar: the forecast is used as before */ }
+}
+function liveFix(x, dayStr, hour) {
+  if (!x || !live.covered || live.lat !== state.lat || live.lng !== state.lng || Date.now() - live.time > 45 * 60000) return x;
+  if (dayStr !== todayStr() || hour !== localParts(new Date()).h) return x;
+  const wetCode = c => (c >= 51 && c <= 67) || (c >= 80 && c <= 82) || c >= 95;
+  if (live.rain) return { ...x, pr: Math.max(x.pr, 0.5 + live.amt * 3), pp: Math.max(x.pp, 90), code: wetCode(x.code) ? x.code : 61, live: 'rain' };
+  return { ...x, pr: 0, pp: Math.min(x.pp, live.near ? 40 : 10), code: wetCode(x.code) ? (x.cc >= 85 ? 3 : 2) : x.code, live: live.near ? 'near' : 'dry', fcWet: wetCode(x.code) || x.pr >= 0.1 };
+}
 // 0 = clear, 1 = fully overcast; drives the 3D lighting
 // cloud over the sun at this minute: blended between forecast hours, so the light changes smoothly as you drag the time
 function cloudFactor() {
@@ -506,7 +538,9 @@ function score(a, x, blocked) {
   if (a < 0) return ['💙 Blue hour', 'Soft, cool, shadowless light. Moody city shots.', '#16224a'];
   if (blocked && a > 0) return ['⛰️ Sun behind the hills', 'Up, but hidden by terrain: soft light here. ' + (state.hill?.rise != null && state.minutes < state.hill.rise ? `Direct sun at ${fmtMin(state.hill.rise)}.` : 'No more direct sun today.'), '#1e2a2a'];
   if (x && x.code >= 95) return ['⛈️ Thunderstorm', `${x.pp}% chance of rain. Plan cover and a backup.`, '#1d1a3a'];
+  if (x?.live === 'rain') return ['🌧️ Raining now', 'Live radar shows rain at your spot. Plan cover or wait it out.', '#13243f'];
   if (isRain(x)) return ['🌧️ Rain likely', `${x.pp}% chance of rain this hour. Plan cover or a backup.`, '#13243f'];
+  if (maybeDrizzle(x)) return ['🌦️ Maybe a light drizzle', `${x.pp}% chance of a few drops. Keep a rain cover handy.`, '#1b2433'];
   if (x && x.low >= 70) return ['☁️ Soft, flat light', 'Overcast: no hard shadows, even exposure, kind to skin.', '#23262d'];
   const some = x && x.low >= 25 ? ' Clouds may pass.' : '';
   if (a < 6) return ['🔥 Golden light!', 'Warm, low sun and long shadows. Beauty-shot time.' + some, '#3a2508'];
@@ -520,6 +554,7 @@ function wxIcon(x, up) {
   if (x.code >= 95) return '⛈️';
   if (isSnow(x)) return '🌨️';
   if (isRain(x)) return '🌧️';
+  if (maybeDrizzle(x)) return '🌦️';
   if (x.code === 45 || x.code === 48) return '🌫️';
   if (x.low >= 70 || x.cc >= 85) return '☁️';
   if (x.cc >= 35 || x.low >= 25) return up ? '⛅' : '☁️';
@@ -590,6 +625,9 @@ function update() {
   let [title, sub, bg] = score(a, x, blocked);
   if (a < -6 && mo.now.a > 5) sub = mo.ph.frac > 0.6 ? `${mo.ph.p[0]} Bright moonlight from the ${compass(mo.now.b)}. Try a moonlit shot.` : `${mo.ph.p[0]} A thin moon is up in the ${compass(mo.now.b)}.`;
   else if (a < -6 && mo.ph.frac < 0.15) sub = '🌑 Dark, moonless sky: good for stars.';
+  const lv = x?.live, lc = $('heroLive');
+  lc.classList.toggle('hidden', !lv);
+  if (lv) lc.textContent = lv === 'rain' ? '📡 Radar: raining here now' : lv === 'near' ? '📡 Radar: showers nearby, dry here' : x.fcWet ? '📡 Radar: dry now (forecast said drizzle)' : '📡 Radar: no rain now';
   const gk = a > -7 && a < 12 ? (state.minutes < 720 ? 'rise' : 'set') : null, gs = gk && glowScore(gk);
   $('heroGlow').classList.toggle('hidden', !gs); if (gs) { $('heroGlow').textContent = `${gs.ico} ${gs.word}`; $('heroGlow').style.setProperty('--glow', gs.pct >= 70 ? '#ff4f7b' : gs.pct >= 50 ? '#ff8a3d' : gs.pct >= 30 ? '#c98a1c' : '#5d6472'); }
   const conf = renderConfidence(t);
@@ -668,7 +706,7 @@ let hoursKey = '', hoursSel = -1;
 function renderHours(t, sel) {
   const box = $('hours');
   if (!state.weather) { box.innerHTML = ''; hoursKey = ''; return; }
-  const key = `${state.date}|${state.lat},${state.lng}|${state.weather.hourly.time[0]}|${!!state.models}`;
+  const key = `${state.date}|${state.lat},${state.lng}|${state.weather.hourly.time[0]}|${!!state.models}|${live.time}|${live.rain}|${live.near}`;
   let fresh = false;
   if (key !== hoursKey) {
     hoursKey = key; fresh = true; box.innerHTML = '';
@@ -730,7 +768,7 @@ function setLocation(lat, lng, label, keepHint) {
   $('place').textContent = '📍 ' + (label || `${lat.toFixed(5)}, ${lng.toFixed(5)}`);
   try { localStorage.setItem('sunscout-last', JSON.stringify({ lat, lng, label })); } catch { /* no storage */ }
   sliderGradient(); buildChips(); update();
-  loadWeather(); checkLiveSky(); loadHorizon();
+  loadWeather(); checkLiveSky(); loadHorizon(); loadLiveRain();
   if (fc.on) { fc.data = null; fc.arrowHour = null; fcLoad().then(fcRender).catch(() => {}); }
   if (scene3d) { scene3d.needsLoad = true; if (state.view === 'orbit' || state.view === 'street') load3D(true); }
 }
@@ -1130,8 +1168,8 @@ $('installBtn').onclick = async () => { if (!installEvt) return; installEvt.prom
 $('installClose').onclick = () => { $('installBar').classList.add('hidden'); try { localStorage.setItem('sunscout-install-dismissed', '1'); } catch { /* no storage */ } };
 // keep the installed app up to date: look for a new version on open and whenever you come back to it,
 // and reload once when it arrives (only if an older version was running)
-const APP_VERSION = '1.9';
-const WHATS_NEW = ['Opens at the real time, and keeps up with the clock', 'Steadier AR view', 'New versions now arrive with an Update button'];
+const APP_VERSION = '2.0';
+const WHATS_NEW = ['Live rain radar for right now: no more rain shown when it is dry outside', 'Light drizzle is shown as 🌦️, not a downpour', 'Opens at the real time, steadier AR'];
 let swReg = null;
 function showUpdate() {
   const box = $('updateBar'); if (!box || !box.classList.contains('hidden')) return;
@@ -1192,13 +1230,15 @@ function followClock() {
   if (state.date !== before) onDayChange(); else update();
 }
 setInterval(() => { if (document.visibilityState === 'visible') followClock(); }, 20000);
+setInterval(() => { if (document.visibilityState === 'visible') loadLiveRain(); }, 10 * 60000);
 let hiddenAt = 0;
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') { hiddenAt = Date.now(); return; }
   const away = hiddenAt ? Date.now() - hiddenAt : 0;
   if (away > 5 * 60000) state.live = true;              // back after a while: show the real time again
   followClock();
-  if (away > 30 * 60000) { loadWeather(); checkLiveSky(); }   // and a fresh forecast
+  if (away > 30 * 60000) { loadWeather(); checkLiveSky(); }
+  if (away > 5 * 60000) loadLiveRain();   // and a fresh forecast
 });
 addEventListener('pageshow', e => { if (e.persisted) { state.live = true; followClock(); } });
 
@@ -1209,6 +1249,7 @@ onDayChange();
 loadWeather();
 checkLiveSky();
 loadHorizon();
+loadLiveRain();
 renderFixCount();
 (() => {
   const c = navigator.connection; if (c && (c.saveData || /2g/.test(c.effectiveType || ''))) return;
