@@ -184,7 +184,7 @@
       <div class="note" style="margin-top:6px">Share the file with your crew so everyone sees the same corrected street.</div>
     </details>
 
-    <div class="credits"><b id="appVersion">Sun Scout</b> · Sun math: SunCalc · Forecast: Open-Meteo · Live clouds: EUMETSAT Meteosat (Indian Ocean) · Radar: RainViewer · Buildings: © OpenStreetMap via OpenFreeMap · Imagery: Esri · Elevation: AWS Terrain Tiles (Mapzen) · Trees: detected from imagery</div>
+    <div class="credits"><b id="appVersion">Sun Scout</b> · <button id="aboutBtn" class="link">About</button> · Sun math: SunCalc · Forecast: Open-Meteo · Live clouds: EUMETSAT Meteosat (Indian Ocean) · Radar: RainViewer · Buildings: © OpenStreetMap via OpenFreeMap · Imagery: Esri · Elevation: AWS Terrain Tiles (Mapzen) · Trees: detected from imagery</div>
   </aside>
 
   <footer id="timebar">
@@ -213,18 +213,61 @@
   <div class="utxt"><b>Updated to Sun Scout <span id="newsVer"></span></b><ul id="newsList"></ul></div>
   <button id="newsOk" class="link" aria-label="Close">✕</button>
 </div>
-<div id="welcome" class="welcome hidden" role="dialog" aria-label="Welcome">
-  <div class="wcard">
-    <div class="wsky"><div class="wsun"></div></div>
-    <h3>Welcome to Sun Scout</h3>
-    <p>See where the sun, the light and the weather will be, for any place and any day, before you get there.</p>
-    <div class="steps">
-      <div><i>🎬</i><b>Plan a shoot</b><span>Golden hour, which way the light falls, will it rain</span></div>
-      <div><i>🏠</i><b>Check a home or a site</b><span>Which walls and rooms get sun, and when</span></div>
-      <div><i>🌅</i><b>Catch a great sky</b><span>Sunrise and sunset colour, the moon, dark nights</span></div>
+<div id="landing" class="landing hidden" aria-label="About Sun Scout">
+  <section class="lhero">
+    <canvas id="lsky" aria-hidden="true"></canvas>
+    <div class="lbrand">☀️ Sun Scout</div>
+    <div class="lhero-in">
+      <h1>Know your light<br>before you get there.</h1>
+      <p>Where the sun will be, how the shadows fall and what the sky will do, for any place on any day.</p>
+      <div class="lcta">
+        <button class="pill hero lgo" data-tour="0">Open Sun Scout</button>
+        <button class="pill ltour" data-tour="1">▶ Take the 1-minute tour</button>
+      </div>
+      <div class="lfree">Free · No sign-up · Works on any phone</div>
+      <div id="lclock" class="lclock"></div>
     </div>
-    <button id="tourGo" class="pill hero">Show me how it works <small>· 1 min</small></button>
-    <button id="welcomeSkip" class="link wskip">Skip, I'll explore on my own</button>
+  </section>
+  <section class="lsec">
+    <h2>Everything about the light, in one place</h2>
+    <div class="lfeat">
+      <div><i>🧭</i><b>Sun path &amp; shadows</b><span>See where the sun rises, sets and shines from, minute by minute, and how long the shadows are.</span></div>
+      <div><i>✨</i><b>Golden &amp; blue hour</b><span>Exact times for the most beautiful light, morning and evening.</span></div>
+      <div><i>🌦️</i><b>Weather you can trust</b><span>Three forecasts compared, plus live radar and satellite for right now.</span></div>
+      <div><i>🌅</i><b>Sunset colour forecast</b><span>Will tonight's sky be fiery or grey? Know before you go.</span></div>
+      <div><i>🏙️</i><b>3D buildings &amp; street view</b><span>Real buildings, real shadows, and the lens you'll shoot with.</span></div>
+      <div><i>🌙</i><b>Moon planner</b><span>Moonrise direction, phase, full moons and dark nights for stars.</span></div>
+    </div>
+  </section>
+  <section class="lsec">
+    <h2>Made for</h2>
+    <div class="lfor">
+      <div><i>🎬</i>Filmmakers &amp; photographers</div>
+      <div><i>🏠</i>Home buyers &amp; architects</div>
+      <div><i>💍</i>Weddings &amp; events</div>
+      <div><i>✈️</i>Travellers</div>
+    </div>
+  </section>
+  <section class="lsec">
+    <h2>How it works</h2>
+    <div class="lhow">
+      <div><b>1</b><span>Find your spot</span><small>Search, or use your location</small></div>
+      <div><b>2</b><span>Pick a time</span><small>Today or up to two weeks ahead</small></div>
+      <div><b>3</b><span>See the light</span><small>Sun, shadows, weather and sky</small></div>
+    </div>
+  </section>
+  <section class="lsec lend">
+    <button class="pill hero lgo" data-tour="0">Open Sun Scout</button>
+    <div class="lcredit">Built on open data: OpenStreetMap, Open-Meteo, EUMETSAT, RainViewer, Esri.</div>
+  </section>
+</div>
+<div id="locAsk" class="welcome hidden" role="dialog" aria-label="Use your location">
+  <div class="wcard lockcard">
+    <div class="locpin"><span>📍</span></div>
+    <h3>Show the sun where you are?</h3>
+    <p>Sun Scout opens right at your spot. Your location is only used to show the sun and weather there.</p>
+    <button id="locYes" class="pill hero">Use my location</button>
+    <button id="locNo" class="link wskip">Not now, I'll search for a place</button>
   </div>
 </div>
 <script type="module" src="app.js"></script>

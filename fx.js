@@ -143,7 +143,7 @@ export class SkyCard {
     const gTop = mix(sky.bot, [20, 24, 30], 0.72), gBot = [14, 16, 21];
     gr = g.createLinearGradient(0, hy - 6, 0, H); gr.addColorStop(0, rgb(gTop)); gr.addColorStop(1, rgb(gBot));
     g.fillStyle = gr; g.beginPath(); g.moveTo(0, H);
-    for (let x = 0; x <= W; x += 8) g.lineTo(x, hy - 3 - 4 * Math.sin(x / 47) - 3 * Math.sin(x / 19 + 1));
+    for (let x = 0; x < W + 8; x += 8) { const xx = Math.min(x, W); g.lineTo(xx, hy - 3 - 4 * Math.sin(xx / 47) - 3 * Math.sin(xx / 19 + 1)); }
     g.lineTo(W, H); g.closePath(); g.fill();
 
     // sunrise / sunset marks on the horizon
@@ -151,6 +151,7 @@ export class SkyCard {
     const mark = (m, lbl) => { if (m == null || isNaN(m)) return; const x = X(m); g.fillRect(x - 0.5, hy - 4, 1, 8); g.textAlign = x < 30 ? 'left' : x > W - 30 ? 'right' : 'center'; g.fillText(lbl, x, hy + 7); };
     mark(d.rise, d.riseLbl); mark(d.set, d.setLbl);
 
+    if (!d.noLine) {
     // a little figure on the ground and its shadow: long and pointing away from the sun
     const fx = W * 0.5, fy = H - 12, fh = 15;
     if (d.alt > 0.5 && !d.blocked) {
@@ -163,6 +164,7 @@ export class SkyCard {
     g.beginPath(); g.arc(fx, fy - fh + 2.5, 2.6, 0, 7); g.fill();
     g.beginPath(); g.moveTo(fx, fy - fh + 5.5); g.lineTo(fx, fy - 5); g.moveTo(fx, fy - 5); g.lineTo(fx - 3, fy); g.moveTo(fx, fy - 5); g.lineTo(fx + 3, fy);
     g.moveTo(fx - 3.5, fy - 9.5); g.lineTo(fx + 3.5, fy - 9.5); g.stroke();
+    }
 
     // rain / snow
     if (d.rain > 0.02 || d.snow) {
@@ -183,7 +185,7 @@ export class SkyCard {
     if (this.flash > 0) { g.fillStyle = `rgba(235,240,255,${this.flash * 0.55})`; g.fillRect(0, 0, W, H); this.flash = Math.max(0, this.flash - dt * 3.5); }
 
     // "now" line
-    g.fillStyle = 'rgba(255,255,255,.22)'; g.fillRect(sx - 0.5, 0, 1, H);
+    if (!d.noLine) { g.fillStyle = 'rgba(255,255,255,.22)'; g.fillRect(sx - 0.5, 0, 1, H); }
   }
 }
 

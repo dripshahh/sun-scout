@@ -30,6 +30,7 @@ const state = {
   live: true,               // following the real clock (until you pick another time)
 };
 
+const openedWithLink = !!location.search.replace(/^\?v=\d+$/, '').replace(/^\?$/, '');   // a shared place: go there, not to your location
 // reopen where you were last time (handy on the phone)
 try { const last = JSON.parse(localStorage.getItem('sunscout-last') || 'null'); if (last && isFinite(last.lat) && isFinite(last.lng)) Object.assign(state, { lat: last.lat, lng: last.lng, label: last.label || '' }); } catch { /* no storage */ }
 
@@ -307,6 +308,8 @@ async function checkLiveSky() {
     const g = ir && ir.features[0] ? (ir.features[0].properties.GRAY_INDEX ?? ir.features[0].properties.RED_BAND ?? null) : null;
     const isCloud = c.RED_BAND > 200 && c.GREEN_BAND > 200 && c.BLUE_BAND > 200;
     const isClear = !isCloud && (c.GREEN_BAND > 100 || c.BLUE_BAND > 100);
+    state.sat = { time: t.getTime(), cloud: isCloud, clear: isClear, thick: isCloud && g != null && g > 190, lat: state.lat, lng: state.lng };
+    setTimeout(update, 0);
     let html;
     if (isCloud) {
       const thick = g != null && g > 190;
@@ -391,7 +394,22 @@ function renderConfidence(t) {
 function wxAt(dayStr, hour) {
   const w = state.weather; if (!w) return null;
   const i = w.hourly.time.indexOf(`${dayStr}T${pad2(hour)}:00`); if (i < 0) return null;
-  return liveFix({ cc: w.hourly.cloud_cover[i], low: w.hourly.cloud_cover_low[i], pp: w.hourly.precipitation_probability[i] ?? 0, pr: w.hourly.precipitation[i] ?? 0, code: w.hourly.weather_code[i], temp: w.hourly.temperature_2m[i], mid: w.hourly.cloud_cover_mid?.[i], high: w.hourly.cloud_cover_high?.[i] }, dayStr, hour);
+  const x = { cc: w.hourly.cloud_cover[i], low: w.hourly.cloud_cover_low[i], pp: w.hourly.precipitation_probability[i] ?? 0, pr: w.hourly.precipitation[i] ?? 0, code: w.hourly.weather_code[i], temp: w.hourly.temperature_2m[i], mid: w.hourly.cloud_cover_mid?.[i], high: w.hourly.cloud_cover_high?.[i] };
+  return liveFix(blendModels(x, `${dayStr}T${pad2(hour)}:00`), dayStr, hour);
+}
+// No single weather model is right every time. The middle value of four (best match + ECMWF, GFS, ICON) is steadier
+// and cuts out one model's stray drizzle or cloud.
+const median = v => { const a = v.filter(n => n != null && isFinite(n)).sort((p, q) => p - q), n = a.length; return !n ? null : n % 2 ? a[(n - 1) / 2] : (a[n / 2 - 1] + a[n / 2]) / 2; };
+function blendModels(x, key) {
+  const m = state.models, j = m ? m.hourly.time.indexOf(key) : -1; if (j < 0) return x;
+  const pick = k => MODELS.map(([id]) => m.hourly[`${k}_${id}`]?.[j]);
+  const cc = median([x.cc, ...pick('cloud_cover')]), low = median([x.low, ...pick('cloud_cover_low')]), pr = median([x.pr, ...pick('precipitation')]);
+  const y = { ...x, cc: Math.round(cc ?? x.cc), low: Math.round(low ?? x.low), pr: pr ?? x.pr };
+  const wet = c => (c >= 51 && c <= 67) || (c >= 80 && c <= 82) || c >= 95;
+  if (wet(y.code) && y.pr < 0.1) y.code = y.cc >= 85 ? 3 : y.cc >= 40 ? 2 : 1;      // most models say dry
+  else if (!wet(y.code) && y.pr >= 0.5) y.code = 61;                                 // most models say rain
+  else if (!wet(y.code) && y.code <= 3) y.code = y.cc >= 85 ? 3 : y.cc >= 40 ? 2 : y.cc >= 15 ? 1 : 0;
+  return y;
 }
 // Rain = a real amount is forecast, not just a model's trace of drizzle (those often never reach the ground in the tropics)
 const isRain = x => x && (x.pr >= 0.5 || (x.pp >= 60 && x.pr >= 0.3) || (x.pp >= 75 && x.pr >= 0.1));
@@ -420,8 +438,16 @@ async function loadLiveRain() {
   } catch { /* no radar: the forecast is used as before */ }
 }
 function liveFix(x, dayStr, hour) {
-  if (!x || !live.covered || live.lat !== state.lat || live.lng !== state.lng || Date.now() - live.time > 45 * 60000) return x;
-  if (dayStr !== todayStr() || hour !== localParts(new Date()).h) return x;
+  if (!x || dayStr !== todayStr() || hour !== localParts(new Date()).h) return x;
+  // satellite (Meteosat, every 15 min): is there cloud over the spot right now?
+  const sat = state.sat;
+  if (sat && sat.lat === state.lat && sat.lng === state.lng && Date.now() - sat.time < 50 * 60000 && (sat.cloud || sat.clear)) {
+    x = { ...x, sat: sat.cloud ? (sat.thick ? 'thick' : 'thin') : 'clear' };
+    if (sat.clear) { x.cc = Math.min(x.cc, 15); x.low = Math.min(x.low, 10); if (x.mid != null) x.mid = Math.min(x.mid, 10); if (x.high != null) x.high = Math.min(x.high, 10); if (x.code <= 3) x.code = 0; }
+    else if (sat.thick) { x.cc = Math.max(x.cc, 90); x.low = Math.max(x.low, 70); if (x.code <= 2) x.code = 3; }
+    else { x.cc = Math.max(x.cc, 50); if (x.code <= 1) x.code = 2; }
+  }
+  if (!live.covered || live.lat !== state.lat || live.lng !== state.lng || Date.now() - live.time > 45 * 60000) return x;
   const wetCode = c => (c >= 51 && c <= 67) || (c >= 80 && c <= 82) || c >= 95;
   if (live.rain) return { ...x, pr: Math.max(x.pr, 0.5 + live.amt * 3), pp: Math.max(x.pp, 90), code: wetCode(x.code) ? x.code : 61, live: 'rain' };
   return { ...x, pr: 0, pp: Math.min(x.pp, live.near ? 40 : 10), code: wetCode(x.code) ? (x.cc >= 85 ? 3 : 2) : x.code, live: live.near ? 'near' : 'dry', fcWet: wetCode(x.code) || x.pr >= 0.1 };
@@ -625,9 +651,11 @@ function update() {
   let [title, sub, bg] = score(a, x, blocked);
   if (a < -6 && mo.now.a > 5) sub = mo.ph.frac > 0.6 ? `${mo.ph.p[0]} Bright moonlight from the ${compass(mo.now.b)}. Try a moonlit shot.` : `${mo.ph.p[0]} A thin moon is up in the ${compass(mo.now.b)}.`;
   else if (a < -6 && mo.ph.frac < 0.15) sub = '🌑 Dark, moonless sky: good for stars.';
-  const lv = x?.live, lc = $('heroLive');
-  lc.classList.toggle('hidden', !lv);
-  if (lv) lc.textContent = lv === 'rain' ? '📡 Radar: raining here now' : lv === 'near' ? '📡 Radar: showers nearby, dry here' : x.fcWet ? '📡 Radar: dry now (forecast said drizzle)' : '📡 Radar: no rain now';
+  const lv = x?.live, sv = x?.sat, lc = $('heroLive');
+  lc.classList.toggle('hidden', !lv && !sv);
+  if (lv || sv) lc.textContent = 'Live: ' + [
+    lv && (lv === 'rain' ? '📡 raining here' : lv === 'near' ? '📡 showers nearby, dry here' : x.fcWet ? '📡 dry (forecast said drizzle)' : '📡 no rain'),
+    sv && (sv === 'clear' ? '🛰️ clear sky' : sv === 'thick' ? '🛰️ thick cloud' : '🛰️ thin cloud')].filter(Boolean).join(' · ');
   const gk = a > -7 && a < 12 ? (state.minutes < 720 ? 'rise' : 'set') : null, gs = gk && glowScore(gk);
   $('heroGlow').classList.toggle('hidden', !gs); if (gs) { $('heroGlow').textContent = `${gs.ico} ${gs.word}`; $('heroGlow').style.setProperty('--glow', gs.pct >= 70 ? '#ff4f7b' : gs.pct >= 50 ? '#ff8a3d' : gs.pct >= 30 ? '#c98a1c' : '#5d6472'); }
   const conf = renderConfidence(t);
@@ -687,7 +715,7 @@ let hoursKey = '', hoursSel = -1;
 function renderHours(t, sel) {
   const box = $('hours');
   if (!state.weather) { box.innerHTML = ''; hoursKey = ''; return; }
-  const key = `${state.date}|${state.lat},${state.lng}|${state.weather.hourly.time[0]}|${!!state.models}|${live.time}|${live.rain}|${live.near}`;
+  const key = `${state.date}|${state.lat},${state.lng}|${state.weather.hourly.time[0]}|${!!state.models}|${live.time}|${live.rain}|${live.near}|${state.sat?.time}|${state.sat?.lat}`;
   let fresh = false;
   if (key !== hoursKey) {
     hoursKey = key; fresh = true; box.innerHTML = '';
@@ -748,10 +776,7 @@ const TOUR = [
   { sel: '.mooncard', title: '🌙 The moon', text: 'When and where the moon rises and sets, its phase, and the next full moon or darkest night for stars.' },
   { sel: '#helpBtn', title: '🎉 You\'re all set', text: 'Tap <b>❓</b> any time to see this guide again. Now find your spot and pick a time!' },
 ];
-const runTour = () => { $('welcome').classList.add('hidden'); lsSet('sunscout-welcomed', '1'); stopPlay(); track('took the tour'); startTour(TOUR, { onEnd: () => window.scrollTo({ top: 0, behavior: 'smooth' }) }); };
-if (!lsGet('sunscout-welcomed')) $('welcome').classList.remove('hidden');
-$('tourGo').onclick = runTour;
-$('welcomeSkip').onclick = () => { $('welcome').classList.add('hidden'); lsSet('sunscout-welcomed', '1'); track('skipped the tour'); };
+const runTour = () => { lsSet('sunscout-welcomed', '1'); stopPlay(); track('took the tour'); startTour(TOUR, { onEnd: () => window.scrollTo({ top: 0, behavior: 'smooth' }) }); };
 $('helpBtn').onclick = runTour;
 
 function onDayChange() { computeHillTimes(); sliderGradient(); buildChips(); if (scene3d) scene3d.setDay(dayStartUTC()); update(); }
@@ -1136,18 +1161,50 @@ $('fixImport').onchange = async e => {
 };
 
 // ───────────────────────── phone: my location, install, offline ─────────────────────────
-$('locate').onclick = () => {
-  track('used my location');
-  if (!navigator.geolocation) { $('place').textContent = 'This browser cannot share your location.'; return; }
-  $('place').textContent = '📍 Finding you…';
-  navigator.geolocation.getCurrentPosition(p => {
-    const { latitude: lat, longitude: lng } = p.coords;
-    map.setView([lat, lng], 17, { animate: false });
-    setLocation(lat, lng, 'My location');
-  }, err => {
-    $('place').textContent = err.code === 1 ? '📍 Location is blocked. Allow it for this site in your browser settings, or search instead.' : '📍 Could not find your location. Try again outside, or search instead.';
-  }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
-};
+function locateMe(quiet) {
+  return new Promise(done => {
+    if (!navigator.geolocation) { if (!quiet) $('place').textContent = 'This browser cannot share your location.'; return done(false); }
+    $('place').textContent = '📍 Finding you…';
+    navigator.geolocation.getCurrentPosition(p => {
+      lsSet('sunscout-loc', 'yes');
+      const { latitude: lat, longitude: lng } = p.coords;
+      map.setView([lat, lng], 17, { animate: false });
+      setLocation(lat, lng, 'Your location');
+      nameHere(lat, lng);
+      done(true);
+    }, err => {
+      if (err.code === 1) lsSet('sunscout-loc', 'no');
+      $('place').textContent = quiet ? '📍 ' + (state.label || `${state.lat.toFixed(5)}, ${state.lng.toFixed(5)}`)
+        : err.code === 1 ? '📍 Location is blocked. Allow it for this site in your browser settings, or search instead.' : '📍 Could not find your location. Try again outside, or search instead.';
+      done(false);
+    }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
+  });
+}
+// "Your location" → the name of the area (e.g. "Kilpauk, Chennai")
+async function nameHere(lat, lng) {
+  try {
+    const j = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat.toFixed(5)}&lon=${lng.toFixed(5)}&zoom=16&accept-language=en`).then(r => r.json());
+    const a = j.address || {}, area = a.neighbourhood || a.suburb || a.quarter || a.village || a.city_district || a.road, city = a.city || a.town || a.county || a.state_district || a.state;
+    const name = [area, city].filter((v, i, l) => v && l.indexOf(v) === i).join(', ');
+    if (!name || state.lat !== lat || state.lng !== lng) return;
+    state.label = name; $('place').textContent = `📍 ${name} · you are here`;
+    lsSet('sunscout-last', JSON.stringify({ lat, lng, label: name }));
+  } catch { /* keep "Your location" */ }
+}
+$('locate').onclick = () => { track('used my location'); locateMe(false); };
+// on open: go to where you are if you've allowed it; otherwise ask once, nicely (and not again for 3 days if you say not now)
+async function askLocation() {
+  let st = 'prompt';
+  try { st = (await navigator.permissions.query({ name: 'geolocation' })).state; } catch { /* older browsers: ask */ }
+  if (st === 'granted' || (st === 'prompt' && lsGet('sunscout-loc') === 'yes')) { await locateMe(true); return; }
+  if (st === 'denied' || !navigator.geolocation) return;
+  if (Date.now() - Number(lsGet('sunscout-loc-later') || 0) < 3 * 864e5) return;
+  return new Promise(done => {
+    $('locAsk').classList.remove('hidden');
+    $('locYes').onclick = async () => { $('locAsk').classList.add('hidden'); track('allowed location'); await locateMe(false); done(); };
+    $('locNo').onclick = () => { $('locAsk').classList.add('hidden'); lsSet('sunscout-loc-later', String(Date.now())); track('location: not now'); done(); };
+  });
+}
 
 const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
 const dismissed = (() => { try { return localStorage.getItem('sunscout-install-dismissed') === '1'; } catch { return false; } })();
@@ -1163,8 +1220,8 @@ $('installBtn').onclick = async () => { if (!installEvt) return; installEvt.prom
 $('installClose').onclick = () => { $('installBar').classList.add('hidden'); try { localStorage.setItem('sunscout-install-dismissed', '1'); } catch { /* no storage */ } };
 // keep the installed app up to date: look for a new version on open and whenever you come back to it,
 // and reload once when it arrives (only if an older version was running)
-const APP_VERSION = '2.1';
-const WHATS_NEW = ['New: a quick guided tour. Tap ❓ next to search any time', 'Removed the AR view (it wasn\'t reliable enough)', 'Live rain radar for right now'];
+const APP_VERSION = '2.2';
+const WHATS_NEW = ['Opens right where you are (after you allow location)', 'More accurate weather: three forecasts blended, plus live satellite and radar for right now', 'A new About page: tap About at the bottom'];
 let swReg = null;
 function showUpdate() {
   const box = $('updateBar'); if (!box || !box.classList.contains('hidden')) return;
@@ -1225,7 +1282,7 @@ function followClock() {
   if (state.date !== before) onDayChange(); else update();
 }
 setInterval(() => { if (document.visibilityState === 'visible') followClock(); }, 20000);
-setInterval(() => { if (document.visibilityState === 'visible') loadLiveRain(); }, 10 * 60000);
+setInterval(() => { if (document.visibilityState === 'visible') { loadLiveRain(); checkLiveSky(); } }, 10 * 60000);
 let hiddenAt = 0;
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') { hiddenAt = Date.now(); return; }
@@ -1233,7 +1290,7 @@ document.addEventListener('visibilitychange', () => {
   if (away > 5 * 60000) state.live = true;              // back after a while: show the real time again
   followClock();
   if (away > 30 * 60000) { loadWeather(); checkLiveSky(); }
-  if (away > 5 * 60000) loadLiveRain();   // and a fresh forecast
+  if (away > 5 * 60000) { loadLiveRain(); checkLiveSky(); }   // and a fresh forecast
 });
 addEventListener('pageshow', e => { if (e.persisted) { state.live = true; followClock(); } });
 
@@ -1251,4 +1308,37 @@ renderFixCount();
   const warm = () => import('./scene3d.js').catch(() => {});
   addEventListener('load', () => setTimeout(() => (window.requestIdleCallback || setTimeout)(warm, { timeout: 4000 }), 2500), { once: true });
 })();
+// ───────────────────────── landing page (first visit) → location → optional tour ─────────────────────────
+let lsky = null, lskyRaf = 0;
+function showLanding() {
+  const el = $('landing'); el.classList.remove('hidden'); el.scrollTop = 0; document.body.classList.add('lockscroll');
+  if (!lsky) lsky = new SkyCard($('lsky'));
+  const s0 = dayStartUTC(), alts = [], t = sunTimes();
+  for (let m = 0; m <= 1440; m += 10) alts.push(deg(sunAt(new Date(s0 + m * 60000)).altitude));
+  const rise = isNaN(t.sunrise) ? 360 : minutesOf(t.sunrise), set = isNaN(t.sunset) ? 1080 : minutesOf(t.sunset);
+  const t0 = performance.now(), still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const frame = now => {
+    if (el.classList.contains('hidden')) return;
+    const m = still ? set - 25 : (rise - 50) + (((now - t0) / 16000) % 1) * (set - rise + 100), a = deg(sunAt(new Date(s0 + m * 60000)).altitude), L = lightOf(a);
+    lsky.set({ minutes: m, alts, alt: a, cloud: 0.12, rain: 0, snow: false, storm: false, fog: false, blocked: false, rise, set, riseLbl: '🌅', setLbl: '🌇', moon: null, noLine: true });
+    $('lclock').textContent = `${fmtMin(m)} · ${L[1]} ${L[2]}`;
+    if (!still) lskyRaf = requestAnimationFrame(frame);
+  };
+  cancelAnimationFrame(lskyRaf); lskyRaf = requestAnimationFrame(frame);
+}
+document.querySelectorAll('#landing [data-tour]').forEach(b => b.onclick = async () => {
+  const tour = b.dataset.tour === '1';
+  $('landing').classList.add('hidden'); document.body.classList.remove('lockscroll'); cancelAnimationFrame(lskyRaf);
+  lsSet('sunscout-welcomed', '1'); track(tour ? 'landing: tour' : 'landing: open app');
+  window.scrollTo(0, 0);
+  await askLocation();
+  if (tour) runTour();
+});
+$('aboutBtn').onclick = () => { track('opened about'); showLanding(); };
+(() => {
+  if (openedWithLink) { lsSet('sunscout-welcomed', '1'); return; }   // opened from a shared link: go there, don't redirect
+  if (!lsGet('sunscout-welcomed') && !standalone) showLanding();
+  else { lsSet('sunscout-welcomed', '1'); askLocation(); }
+})();
+
 window.sunScout = { state, map, get scene() { return scene3d; } }; // handy for debugging in the console
