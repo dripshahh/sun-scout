@@ -1,4 +1,5 @@
 import { horizonProfile, hillTimes } from './terrain.js';
+import { SkyCard, WeatherFX } from './fx.js';
 
 // ───────────────────────── visitor counter (GoatCounter: free, anonymous, no cookies) ─────────────────────────
 // Your stats: https://<name>.goatcounter.com. Only counts and app actions are sent, never what anyone searches or where they are.
@@ -231,7 +232,7 @@ function fcRender() {
   const i0 = times.indexOf(`${state.date}T${pad2(h0)}:00`), i1 = h0 < 23 ? i0 + 1 : i0;
   const dayName = new Date(state.date + 'T12:00:00Z').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
   if (i0 < 0) {
-    if (fc.layer) fc.layer.setOpacity(0); fc.arrows.clearLayers();
+    if (fc.layer) fc.layer.setOpacity(0); fc.arrows.clearLayers(); fc.grid = null; updateFX();
     $('fcTime').textContent = `🔮 ${dayName}: no forecast`; $('fcNote').textContent = 'Forecasts reach about 16 days ahead. Pick a nearer date.';
     return;
   }
@@ -250,6 +251,7 @@ function fcRender() {
     px[o] = 255 - r * 170; px[o + 1] = 255 - r * 120; px[o + 2] = 255; px[o + 3] = Math.round(Math.max(a * 210, r * 220 * edge));
   }
   g.putImageData(img, 0, 0);
+  fc.grid = rain; fc.rainMax = Math.max(...rain); updateFX();
   const { lat0, lng0, dLat, dLng } = fc.data, half = dLat / 2, halfL = dLng / 2;
   const bounds = [[lat0 - (N - 1) * dLat - half, lng0 - halfL], [lat0 + half, lng0 + (N - 1) * dLng + halfL]];
   const url = fc.canvas.toDataURL();
@@ -277,7 +279,7 @@ async function fcOn() {
   catch (e) { $('fcTime').textContent = '🔮 Forecast map unavailable'; $('fcNote').textContent = 'Check your connection and try again.'; }
 }
 function fcOff() {
-  fc.on = false; $('fcBtn').classList.remove('on'); $('fcBar').classList.add('hidden');
+  fc.on = false; fc.grid = null; $('fcBtn').classList.remove('on'); $('fcBar').classList.add('hidden'); updateFX();
   if (fc.layer) { map.removeLayer(fc.layer); fc.layer = null; } fc.arrows.clearLayers(); map.removeLayer(fc.arrows);
 }
 $('fcBtn').onclick = () => { track('forecast clouds'); fc.on ? fcOff() : fcOn(); };
@@ -297,10 +299,10 @@ async function checkLiveSky() {
     let html;
     if (isCloud) {
       const thick = g != null && g > 190;
-      html = `<span class="big">☁️ Cloud over this spot</span>${thick ? 'Thick, high cloud. The sun is probably hidden.' : 'Thin or low cloud. You may get hazy or broken sun.'}`;
-    } else if (isClear) html = `<span class="big">☀️ Clear sky over this spot</span>The satellite sees no cloud here. The sun should be out (if it's daytime).`;
+      html = `<span class="big">☁️ Cloud over this spot</span>${thick ? 'Thick, high cloud: the sun is probably hidden.' : 'Thin or low cloud: hazy or broken sun.'}`;
+    } else if (isClear) html = `<span class="big">☀️ Clear sky over this spot</span>No cloud seen here right now.`;
     else html = `<span class="big">❔ No reading</span>The satellite has no data for this spot.`;
-    box.innerHTML = html + `<div class="note" style="margin-top:4px">Meteosat image from ${fmt(t)} local (${ago} min ago). Each pixel covers about 3–4 km, so it can't see a single small cloud.</div>`;
+    box.innerHTML = html + `<div class="note" style="margin-top:4px">Meteosat · ${fmt(t)} (${ago} min ago) · sees areas about 3 km wide</div>`;
   } catch (e) { box.textContent = 'Satellite check unavailable right now.'; }
 }
 $('liveRefresh').onclick = () => { clouds.latest = null; checkLiveSky(); };
@@ -314,7 +316,7 @@ async function loadWeather() {
     const j = await fetch(url).then(r => r.json());
     if (j.error) throw new Error(j.reason);
     const changed = state.offset !== j.utc_offset_seconds;
-    state.weather = j; state.offset = j.utc_offset_seconds;
+    state.weather = j; state.offset = j.utc_offset_seconds; $('wxNow').textContent = '';
     loadModels();
     if (changed) setNow();
   } catch (e) { state.weather = null; $('wxNow').textContent = 'Forecast unavailable: ' + e.message; }
@@ -351,21 +353,13 @@ function confidenceAt(dayStr, hour) {
   return { cat, agree: n, total: ms.length, odd: ms.filter(m => m.cat !== cat) };
 }
 function renderConfidence(t) {
-  const bar = $('confBar'); bar.innerHTML = '';
-  if (!state.models) { $('confNow').textContent = state.weather ? 'Comparing weather models…' : ''; $('bestWindow').textContent = ''; return null; }
+  if (!state.models) { $('confNow').textContent = state.weather ? 'Comparing 3 weather models…' : ''; $('bestWindow').textContent = ''; state.best = null; return null; }
   const sel = Math.floor(state.minutes / 60);
-  for (let h = 0; h < 24; h++) {
-    const c = confidenceAt(state.date, h), el = document.createElement('div');
-    if (c) { el.className = c.agree === c.total && c.total > 1 ? 'c3' : c.agree >= 2 ? 'c2' : 'c1'; el.title = `${fmtMin(h * 60)}: ${c.agree} of ${c.total} say ${CAT[c.cat]}`; }
-    if (h === sel) el.classList.add('now');
-    el.onclick = () => { stopPlay(); state.minutes = h * 60 + 30; $('t').value = state.minutes; update(); };
-    bar.appendChild(el);
-  }
   const c = confidenceAt(state.date, sel);
   if (!c) { $('confNow').textContent = 'Model comparison isn\'t available this far ahead.'; }
-  else if (c.agree === c.total && c.total > 1) $('confNow').innerHTML = `<b>${fmtMin(sel * 60)}</b> · ✅ All ${c.total} forecasts agree: <b>${CAT[c.cat]}</b>. High confidence.`;
-  else if (c.agree >= 2) $('confNow').innerHTML = `<b>${fmtMin(sel * 60)}</b> · 🟡 ${c.agree} of ${c.total} forecasts say <b>${CAT[c.cat]}</b> (${c.odd.map(o => `${o.name}: ${CAT[o.cat]}`).join(', ')}). Fairly likely.`;
-  else $('confNow').innerHTML = `<b>${fmtMin(sel * 60)}</b> · ❓ Forecasts disagree (${modelsAt(state.date, sel).map(o => CAT[o.cat]).join(' / ')}). Keep a backup plan.`;
+  else if (c.agree === c.total && c.total > 1) $('confNow').innerHTML = `<b>${fmtMin(sel * 60)}</b> · all ${c.total} weather models say <b>${CAT[c.cat]}</b>`;
+  else if (c.agree >= 2) $('confNow').innerHTML = `<b>${fmtMin(sel * 60)}</b> · ${c.agree} of ${c.total} models say <b>${CAT[c.cat]}</b> (${c.odd.map(o => `${o.name.split(' ')[0]}: ${CAT[o.cat]}`).join(', ')})`;
+  else $('confNow').innerHTML = `<b>${fmtMin(sel * 60)}</b> · models disagree (${modelsAt(state.date, sel).map(o => CAT[o.cat]).join(' / ')}). Keep a backup plan.`;
 
   // most reliable sunny stretch of daylight today
   const runs = []; let cur = null;
@@ -375,10 +369,11 @@ function renderConfidence(t) {
     if (level && cur && cur.level === level) cur.end = h; else { if (cur) runs.push(cur); cur = level ? { start: h, end: h, level } : null; }
   }
   if (cur) runs.push(cur);
-  const best = runs.filter(r => r.level === 2).sort((a, b) => (b.end - b.start) - (a.end - a.start))[0] || runs.sort((a, b) => (b.end - b.start) - (a.end - a.start))[0];
+  const best0 = runs.filter(r => r.level === 2).sort((a, b) => (b.end - b.start) - (a.end - a.start))[0] || runs.sort((a, b) => (b.end - b.start) - (a.end - a.start))[0];
+  const best = best0; state.best = best ? best.start : null;
   $('bestWindow').innerHTML = best
-    ? `☀️ <b>Most reliable sun ${(() => { const p = localParts(new Date()); return state.date === `${p.y}-${pad2(p.m + 1)}-${pad2(p.d)}` ? 'today' : 'on ' + new Date(state.date + 'T12:00:00Z').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' }); })()}: ${fmtMin(best.start * 60)}–${fmtMin((best.end + 1) * 60)}</b>${best.level === 2 ? ' (all forecasts agree)' : ' (2 of 3 forecasts agree)'}`
-    : '☁️ <b>No clearly sunny stretch this day.</b> Expect soft or cloudy light, or check again closer to the date.';
+    ? `☀️ Best sun ${(() => { const p = localParts(new Date()); return state.date === `${p.y}-${pad2(p.m + 1)}-${pad2(p.d)}` ? 'today' : 'on ' + new Date(state.date + 'T12:00:00Z').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' }); })()}: <b>${fmtMin(best.start * 60)}–${fmtMin((best.end + 1) * 60)}</b>${best.level === 2 ? ' · all models agree' : ' · 2 of 3 models agree'}`
+    : '☁️ No clearly sunny stretch this day: expect soft light.';
   return c;
 }
 
@@ -388,7 +383,6 @@ function wxAt(dayStr, hour) {
   return { cc: w.hourly.cloud_cover[i], low: w.hourly.cloud_cover_low[i], pp: w.hourly.precipitation_probability[i] ?? 0, pr: w.hourly.precipitation[i] ?? 0, code: w.hourly.weather_code[i], temp: w.hourly.temperature_2m[i] };
 }
 const isRain = x => x && (x.pr > 0.2 || x.pp >= 60);
-const wxColor = x => !x ? '#333' : isRain(x) ? 'var(--blue)' : (x.low < 25 && x.cc < 40) ? 'var(--good)' : x.low < 60 ? 'var(--mid)' : 'var(--grey)';
 // 0 = clear, 1 = fully overcast; drives the 3D lighting
 // cloud over the sun at this minute: blended between forecast hours, so the light changes smoothly as you drag the time
 function cloudFactor() {
@@ -400,18 +394,38 @@ function cloudFactor() {
 }
 
 // ───────────────────────── panels ─────────────────────────
-function lightQuality(a) { return a < -6 ? 'Night' : a < 0 ? 'Blue hour' : a < 6 ? 'Golden, warm' : a < 20 ? 'Low, directional' : a < 50 ? 'Neutral' : 'Harsh, overhead'; }
+const LIGHT = [[-6, '🌙', 'Night'], [0, '💙', 'Blue hour'], [6, '🔥', 'Golden'], [20, '😎', 'Directional'], [50, '🙂', 'Neutral'], [91, '🥵', 'Harsh']];
+const lightOf = a => LIGHT.find(l => a < l[0]);
 function score(a, x, blocked) {
-  if (a < -6) return ['🌙', 'Night', 'The sun is down. Use practicals or city lights.', '#141a2e'];
-  if (a < 0) return ['💙', 'Blue hour', 'Soft, cool light with no shadows. Great for moody city shots.', '#16224a'];
-  if (blocked && a > 0) return ['⛰️', 'Sun is behind the hills', 'The sun is up but hidden by terrain: soft, shadowless light here. ' + (state.hill?.rise != null && state.minutes < state.hill.rise ? `Direct sun reaches you at ${fmtMin(state.hill.rise)}.` : 'Direct sun has gone for the day.'), '#1e2a2a'];
-  if (isRain(x)) return ['🌧️', 'Rain likely', `${x.pp}% chance of rain this hour. Plan cover or a backup.`, '#13243f'];
-  if (x && x.low >= 70) return ['☁️', 'Flat, soft light', 'Overcast: no hard shadows. Good for skin tones and even exposure.', '#23262d'];
-  const some = x && x.low >= 25 ? ' Some clouds may pass over.' : '';
-  if (a < 6) return ['🔥', 'Golden light!', 'Warm, low sun with long shadows. Best time for beauty shots.' + some, '#3a2508'];
-  if (a < 20) return ['😎', 'Lovely directional light', 'Low angle with strong texture and shape.' + some, '#2f2810'];
-  if (a < 50) return ['🙂', 'Good, neutral daylight', 'Clean light, but watch for squinting.' + some, '#1f2a1c'];
-  return ['🥵', 'Harsh overhead sun', 'Short shadows and dark eye sockets. Use diffusion or shoot in shade.' + some, '#3a1c14'];
+  if (a < -6) return ['🌙 Night', 'The sun is down. Use practicals or city light.', '#141a2e'];
+  if (a < 0) return ['💙 Blue hour', 'Soft, cool, shadowless light. Moody city shots.', '#16224a'];
+  if (blocked && a > 0) return ['⛰️ Sun behind the hills', 'Up, but hidden by terrain: soft light here. ' + (state.hill?.rise != null && state.minutes < state.hill.rise ? `Direct sun at ${fmtMin(state.hill.rise)}.` : 'No more direct sun today.'), '#1e2a2a'];
+  if (x && x.code >= 95) return ['⛈️ Thunderstorm', `${x.pp}% chance of rain. Plan cover and a backup.`, '#1d1a3a'];
+  if (isRain(x)) return ['🌧️ Rain likely', `${x.pp}% chance of rain this hour. Plan cover or a backup.`, '#13243f'];
+  if (x && x.low >= 70) return ['☁️ Soft, flat light', 'Overcast: no hard shadows, even exposure, kind to skin.', '#23262d'];
+  const some = x && x.low >= 25 ? ' Clouds may pass.' : '';
+  if (a < 6) return ['🔥 Golden light!', 'Warm, low sun and long shadows. Beauty-shot time.' + some, '#3a2508'];
+  if (a < 20) return ['😎 Lovely directional light', 'Low angle with strong texture and shape.' + some, '#2f2810'];
+  if (a < 50) return ['🙂 Good daylight', 'Clean, neutral light. Watch for squinting.' + some, '#1f2a1c'];
+  return ['🥵 Harsh overhead sun', 'Short shadows, dark eyes. Diffuse it or find shade.' + some, '#3a1c14'];
+}
+const isSnow = x => x && ((x.code >= 71 && x.code <= 77) || x.code === 85 || x.code === 86);
+function wxIcon(x, up) {
+  if (!x) return '·';
+  if (x.code >= 95) return '⛈️';
+  if (isSnow(x)) return '🌨️';
+  if (isRain(x)) return '🌧️';
+  if (x.code === 45 || x.code === 48) return '🌫️';
+  if (x.low >= 70 || x.cc >= 85) return '☁️';
+  if (x.cc >= 35 || x.low >= 25) return up ? '⛅' : '☁️';
+  return up ? '☀️' : '🌙';
+}
+// weather at this exact minute for the animations: what it's doing here, blended a little across the hour
+function skyWeather() {
+  const x = wxAt(state.date, Math.floor(state.minutes / 60));
+  if (!x) return { cloud: 0, rain: 0, snow: false, storm: false, fog: false, x };
+  const rain = isRain(x) ? clamp(0.3 + x.pr / 3, 0.3, 1) : 0;
+  return { cloud: clamp((0.6 * x.low + 0.4 * x.cc) / 100, 0, 1), rain, snow: isSnow(x), storm: x.code >= 95, fog: x.code === 45 || x.code === 48, x };
 }
 function sliderGradient() {
   const stops = [], start = dayStartUTC();
@@ -436,11 +450,14 @@ function buildChips() {
 
 function update() {
   const d = selected(), p = sunAt(d), a = deg(p.altitude), b = bearingOf(p.azimuth);
-  $('tLabel').textContent = fmt(d); $('tLabel2').textContent = fmt(d);
-  $('az').textContent = `${b.toFixed(0)}° ${compass(b)}`;
-  $('alt').textContent = `${a.toFixed(1)}°`;
-  $('shadow').textContent = a > 0.5 ? `${(1 / Math.tan(p.altitude)).toFixed(1)}× object height` : 'none';
-  $('quality').textContent = lightQuality(a);
+  $('tLabel').textContent = fmt(d);
+  $('az').textContent = `${compass(b)} ${b.toFixed(0)}°`;
+  $('alt').textContent = a > 0 ? `${a.toFixed(0)}°` : 'down';
+  $('shadow').textContent = a > 0.5 ? `${Math.min(99, 1 / Math.tan(p.altitude)).toFixed(1)}×` : '—';
+  $('dirArrow').setAttribute('transform', `rotate(${b} 20 20)`);
+  const altR = clamp(a, 0, 90) * D2R; $('altArrow').querySelector('line').setAttribute('x2', 6 + 24 * Math.cos(altR)); $('altArrow').querySelector('line').setAttribute('y2', 32 - 24 * Math.sin(altR));
+  $('altArrow').querySelector('circle').setAttribute('cx', 6 + 24 * Math.cos(altR)); $('altArrow').querySelector('circle').setAttribute('cy', 32 - 24 * Math.sin(altR));
+  $('shadowBar').setAttribute('width', a > 0.5 ? clamp(21 / Math.tan(p.altitude), 1.5, 24) : 0);
 
   const t = sunTimes();
   $('rise').textContent = fmt(t.sunrise); $('set').textContent = fmt(t.sunset);
@@ -448,31 +465,37 @@ function update() {
   $('goldPM').textContent = fmt(t.goldenHour) + '–' + fmt(t.sunset);
   $('blueAM').textContent = fmt(t.dawn) + '–' + fmt(t.blueEndAM);
   $('bluePM').textContent = fmt(t.blueStartPM) + '–' + fmt(t.dusk);
+  $('dayNeedle').style.left = (state.minutes / 1440 * 100) + '%';
+  const inWin = (s, e) => state.minutes >= minutesOf(s) && state.minutes < minutesOf(e);
+  document.querySelectorAll('.mom').forEach(m => m.classList.remove('now'));
+  const momNow = inWin(t.dawn, t.blueEndAM) ? 0 : inWin(t.sunrise, t.goldenHourEnd) ? 2 : inWin(t.goldenHour, t.sunset) ? 3 : inWin(t.blueStartPM, t.dusk) ? 5 : -1;
+  if (momNow >= 0) document.querySelectorAll('.mom')[momNow].classList.add('now');
 
-  // forecast strip
-  const hours = $('hours'); hours.innerHTML = '';
+  // hour-by-hour strip (built once per day / forecast, then only the highlight moves)
   const sel = Math.floor(state.minutes / 60), x = wxAt(state.date, sel);
-  if (state.weather) {
-    for (let h = 0; h < 24; h++) {
-      const w = wxAt(state.date, h), el = document.createElement('div');
-      const mid = new Date(dayStartUTC() + (h * 60 + 30) * 60000);
-      el.style.background = wxColor(w); el.style.opacity = (mid > t.sunrise && mid < t.sunset) ? 1 : .35;
-      if (h === sel) el.className = 'now';
-      el.title = w ? `${fmtMin(h * 60)} · ${wxText(w.code)} · clouds ${w.cc}% (low ${w.low}%) · rain ${w.pp}% · ${w.temp}°C` : 'no data';
-      el.onclick = () => { stopPlay(); state.minutes = h * 60 + 30; $('t').value = state.minutes; update(); };
-      hours.appendChild(el);
-    }
-    $('wxNow').innerHTML = x ? `<b>${fmtMin(sel * 60)}</b> · ${wxText(x.code)} · clouds ${x.cc}% (low ${x.low}%) · rain ${x.pp}% · ${x.temp}°C` : 'No forecast for this date (only about 16 days ahead are available).';
-  }
+  renderHours(t, sel);
 
   const blocked = sunBlocked(d);
-  const [emoji, title, sub, bg] = score(a, x, blocked);
+  const L = a > 0 && (blocked || (x && (x.low >= 70 || isRain(x)))) ? [0, '☁️', 'Soft'] : lightOf(a);
+  $('quality').textContent = L[2]; $('lightIco').textContent = L[1];
+  if (blocked) { $('shadow').textContent = '—'; $('shadowBar').setAttribute('width', 0); }
+  const [title, sub, bg] = score(a, x, blocked);
   const conf = renderConfidence(t);
-  const confNote = !conf || a < 0 ? '' : conf.agree === conf.total && conf.total > 1 ? ' ✅ All forecasts agree.' : conf.agree >= 2 ? ` 🟡 ${conf.agree} of ${conf.total} forecasts agree.` : ' ❓ Forecasts disagree, so keep a backup.';
-  $('score').querySelector('.emoji').textContent = emoji;
-  $('score').querySelector('.title').textContent = title;
-  $('score').querySelector('.sub').textContent = sub + confNote;
-  $('score').style.background = `linear-gradient(135deg, ${bg}, #1d212b)`;
+  $('heroTitle').textContent = title; $('heroSub').textContent = sub;
+  $('hero').style.setProperty('--tint', bg);
+  const cc = $('heroConf');
+  if (!conf || a < -6) cc.classList.add('hidden');
+  else { cc.classList.remove('hidden'); cc.className = 'confchip ' + (conf.agree === conf.total && conf.total > 1 ? 'c3' : conf.agree >= 2 ? 'c2' : 'c1'); cc.textContent = conf.agree === conf.total && conf.total > 1 ? '✓ Forecasts agree' : conf.agree >= 2 ? `${conf.agree} of ${conf.total} forecasts agree` : 'Forecasts disagree: have a backup'; }
+  $('bTemp').textContent = x ? `${wxIcon(x, a > 0)} ${Math.round(x.temp)}°` : '–';
+  $('bRain').classList.toggle('hidden', !x || x.pp < 20); if (x) $('bRain').textContent = `💧 ${x.pp}%`;
+
+  // the animated sky + weather over the map / 3D
+  const w = skyWeather(), s0 = dayStartUTC(), alts = [];
+  for (let m = 0; m <= 1440; m += 10) alts.push(deg(sunAt(new Date(s0 + m * 60000)).altitude));
+  const rm = minutesOf(t.sunrise), sm = minutesOf(t.sunset);
+  sky.set({ minutes: state.minutes, alts, alt: a, cloud: w.cloud, rain: w.rain, snow: w.snow, storm: w.storm, fog: w.fog, blocked,
+    rise: rm >= 0 && rm < 1440 ? rm : null, set: sm >= 0 && sm < 1440 ? sm : null, riseLbl: '🌅 ' + fmt(t.sunrise), setLbl: fmt(t.sunset) + ' 🌇' });
+  updateFX(w);
 
   // facade
   const f = Number($('facade').value); $('facadeLbl').textContent = `${f}° ${compass(f)}`;
@@ -492,6 +515,72 @@ function update() {
   if (scene3d && (state.view === 'orbit' || state.view === 'street')) scene3d.setSun(d, cloudFactor(), blocked);
   renderHills();
 }
+// ───────────────────────── visuals: animated sky card, hour strip, weather effects ─────────────────────────
+const lsGet = k => { try { return localStorage.getItem(k); } catch { return null; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch { /* storage blocked */ } };
+const jumpTo = m => { stopPlay(); state.minutes = clamp(Math.round(m), 0, 1439); $('t').value = state.minutes; update(); };
+const sky = new SkyCard($('sky'), { onScrub: m => { jumpTo(m); if (!lsGet('sunscout-skyhint')) { lsSet('sunscout-skyhint', '1'); $('skyHint').classList.add('gone'); } } });
+if (lsGet('sunscout-skyhint')) $('skyHint').classList.add('gone');
+document.querySelectorAll('.mom').forEach(m => m.onclick = () => { const v = sunTimes()[m.dataset.at]; if (!isNaN(v)) jumpTo(minutesOf(v) + 1); });
+$('bestWindow').onclick = () => { if (state.best != null) jumpTo(state.best * 60); };
+
+let hoursKey = '', hoursSel = -1;
+function renderHours(t, sel) {
+  const box = $('hours');
+  if (!state.weather) { box.innerHTML = ''; hoursKey = ''; return; }
+  const key = `${state.date}|${state.lat},${state.lng}|${state.weather.hourly.time[0]}|${!!state.models}`;
+  let fresh = false;
+  if (key !== hoursKey) {
+    hoursKey = key; fresh = true; box.innerHTML = '';
+    if (!wxAt(state.date, 12)) { box.innerHTML = '<div class="note nofc">No forecast this far ahead (about 16 days is the limit).</div>'; return; }
+    for (let h = 0; h < 24; h++) {
+      const w = wxAt(state.date, h), mid = new Date(dayStartUTC() + (h * 60 + 30) * 60000), up = mid > t.sunrise && mid < t.sunset, c = confidenceAt(state.date, h);
+      const el = document.createElement('button'); el.className = 'hr' + (up ? ' up' : '');
+      const dot = c ? (c.agree === c.total && c.total > 1 ? 'c3' : c.agree >= 2 ? 'c2' : 'c1') : '';
+      el.innerHTML = `<span class="t">${pad2(h)}</span><span class="i">${wxIcon(w, up)}</span><span class="tp">${w ? Math.round(w.temp) + '°' : ''}</span><span class="r">${w && w.pp >= 20 ? '💧' + w.pp + '%' : ''}</span><i class="dot ${dot}"></i>`;
+      el.title = w ? `${fmtMin(h * 60)} · ${wxText(w.code)} · clouds ${w.cc}% · rain ${w.pp}% · ${w.temp}°C` : '';
+      el.onclick = () => jumpTo(h * 60 + 30);
+      box.appendChild(el);
+    }
+  }
+  if (sel === hoursSel && !fresh) return;
+  hoursSel = sel;
+  [...box.children].forEach((el, h) => el.classList.toggle('now', h === sel));
+  const el = box.children[sel];
+  if (el && el.classList.contains('hr')) box.scrollTo({ left: el.offsetLeft - box.clientWidth / 2 + el.offsetWidth / 2, behavior: fresh ? 'auto' : 'smooth' });
+}
+
+// rain / snow / storm drawn over the map or 3D view
+const fx = new WeatherFX($('stage'));
+let fxOn = lsGet('sunscout-fx') !== '0';
+const fxLabel = () => { $('fxBtn').textContent = `🌧️ Rain & storm animation: ${fxOn ? 'on' : 'off'}`; };
+fxLabel();
+$('fxBtn').onclick = () => { fxOn = !fxOn; lsSet('sunscout-fx', fxOn ? '1' : '0'); fxLabel(); updateFX(); };
+function fcRainAt(x, y) {   // forecast rain (0..1) at a point on the screen, from the forecast-cloud grid
+  const g = fc.grid; if (!g) return 0;
+  const ll = map.containerPointToLatLng([x, y]), N = fc.N, { lat0, lng0, dLat, dLng } = fc.data;
+  const gx = (ll.lng - lng0) / dLng, gy = (lat0 - ll.lat) / dLat;
+  if (gx < -0.5 || gy < -0.5 || gx > N - 0.5 || gy > N - 0.5) return 0;
+  const xi = clamp(Math.floor(gx), 0, N - 2), yi = clamp(Math.floor(gy), 0, N - 2), fx_ = clamp(gx - xi, 0, 1), fy = clamp(gy - yi, 0, 1);
+  const v = (g[yi * N + xi] * (1 - fx_) + g[yi * N + xi + 1] * fx_) * (1 - fy) + (g[(yi + 1) * N + xi] * (1 - fx_) + g[(yi + 1) * N + xi + 1] * fx_) * fy;
+  return v < 0.15 ? 0 : clamp(0.25 + v / 1.5, 0, 1);
+}
+function updateFX(w = skyWeather()) {
+  const off = { kind: 'off', fog: 0 }, view3d = state.view !== 'map';
+  if (!fxOn || (view3d && !state.useWx)) return fx.set(off);
+  if (!view3d && fc.on && fc.grid) return fx.set(fc.rainMax >= 0.15 ? { kind: 'rain', intensity: 1, storm: false, fog: 0, rainAt: fcRainAt } : off);
+  if (!view3d && map.getZoom() < 11) return fx.set(off);   // zoomed out: the forecast is for one spot, so don't rain on the whole region
+  fx.set({ kind: w.snow ? 'snow' : w.rain > 0 ? 'rain' : 'off', intensity: w.rain || 0.5, storm: w.storm, fog: w.fog ? 1 : 0 });
+}
+map.on('zoomend', () => updateFX());
+
+// first visit: a quick three-step welcome
+if (!lsGet('sunscout-welcomed')) {
+  $('welcome').classList.remove('hidden');
+  const close = () => { $('welcome').classList.add('hidden'); lsSet('sunscout-welcomed', '1'); };
+  $('welcomeGo').onclick = close; $('welcome').onclick = e => { if (e.target.id === 'welcome') close(); };
+}
+
 function onDayChange() { computeHillTimes(); sliderGradient(); buildChips(); if (scene3d) scene3d.setDay(dayStartUTC()); update(); }
 
 // ───────────────────────── location ─────────────────────────
@@ -741,6 +830,7 @@ function setTabs(view) {
     toast(view === 'street' ? '👆 Drag to look around · 🕹️ thumb stick to walk · double-tap to jump there · pinch for lens' : '👆 Drag to spin · pinch to zoom · double-tap the ground to stand there · tap a building to fix it', 5500);
   }
   scene3d?.setActive(own3d);
+  updateFX();
 }
 async function switchView(view) {
   setTabs(view);
@@ -899,7 +989,7 @@ $('installBtn').onclick = async () => { if (!installEvt) return; installEvt.prom
 $('installClose').onclick = () => { $('installBar').classList.add('hidden'); try { localStorage.setItem('sunscout-install-dismissed', '1'); } catch { /* no storage */ } };
 // keep the installed app up to date: look for a new version on open and whenever you come back to it,
 // and reload once when it arrives (only if an older version was running)
-const APP_VERSION = 'v6';
+const APP_VERSION = 'v7';
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
   const hadController = !!navigator.serviceWorker.controller;
   let reloaded = false;

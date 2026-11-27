@@ -15,7 +15,7 @@ Go to **github.com** → **Sign up**. Pick a username (it becomes part of your a
 ## 3. Upload the app files
 1. On the new repository page, click **uploading an existing file**.
 2. Open this folder in Finder and drag in **all of these**:
-   - `index.html`, `style.css`, `app.js`, `scene3d.js`, `terrain.js`, `sw.js`, `manifest.webmanifest`, `README.md`
+   - `index.html`, `style.css`, `app.js`, `scene3d.js`, `terrain.js`, `fx.js`, `sw.js`, `manifest.webmanifest`, `README.md`
    - the whole `icons` folder
 3. Click **Commit changes**.
 

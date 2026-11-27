@@ -104,49 +104,51 @@
     </div>
     <div class="row between placerow"><div id="place" class="place">📍 Gateway of India, Mumbai</div><button id="savePlace" class="link" title="Save this spot under a name">⭐ Save</button></div>
 
-    <div id="score" class="score"><div class="emoji">☀️</div><div><div class="title">–</div><div class="sub">–</div></div></div>
-
-    <div class="card">
-      <div class="row between"><h2>🛰️ Right now, from space</h2><button id="liveRefresh" class="link">refresh</button></div>
-      <div id="liveSky" class="live">Checking the latest satellite image…</div>
-    </div>
-
-    <div class="card">
-      <h2>☀️ Sun at <span id="tLabel2">–</span></h2>
-      <div class="grid">
-        <div><div class="k">Direction</div><div class="v" id="az">–</div></div>
-        <div><div class="k">Height</div><div class="v" id="alt">–</div></div>
-        <div><div class="k">Shadows</div><div class="v" id="shadow">–</div></div>
-        <div><div class="k">Light</div><div class="v" id="quality">–</div></div>
+    <section id="hero" class="hero">
+      <div class="skywrap">
+        <canvas id="sky" aria-label="The sun's path today. Drag across it to change the time."></canvas>
+        <div class="badges"><span id="bTemp" class="badge">–</span><span id="bRain" class="badge rain hidden"></span></div>
+        <div id="skyHint" class="skyhint">👆 drag to change time</div>
       </div>
-    </div>
+      <div class="herotext">
+        <div id="heroTitle" class="title">–</div>
+        <div id="heroSub" class="sub">–</div>
+        <div id="heroConf" class="confchip hidden"></div>
+      </div>
+      <div class="tiles">
+        <div class="tile"><svg viewBox="0 0 40 40" class="ico"><circle cx="20" cy="20" r="15" class="ring"/><text x="20" y="9.5" class="n">N</text><g id="dirArrow"><line x1="20" y1="20" x2="20" y2="8" class="ray"/><circle cx="20" cy="7" r="3.6" class="sundot"/></g><circle cx="20" cy="20" r="2" class="me"/></svg><b id="az">–</b><span>Sun from</span></div>
+        <div class="tile"><svg viewBox="0 0 40 40" class="ico"><path d="M6 32 H35" class="gnd"/><path d="M28 32 A22 22 0 0 0 6 10" class="ring" fill="none"/><g id="altArrow"><line x1="6" y1="32" x2="30" y2="32" class="ray"/><circle cx="30" cy="32" r="3.6" class="sundot"/></g></svg><b id="alt">–</b><span>Sun height</span></div>
+        <div class="tile"><svg viewBox="0 0 40 40" class="ico"><path d="M4 33 H36" class="gnd"/><rect id="shadowBar" x="12" y="31.5" width="10" height="3" rx="1.5" class="shade"/><circle cx="12" cy="13" r="3" class="fig"/><path d="M12 16 V27 M12 27 L9 33 M12 27 L15 33 M8 20 H16" class="figl"/></svg><b id="shadow">–</b><span>Shadow</span></div>
+        <div class="tile"><div id="lightIco" class="ico big">✨</div><b id="quality">–</b><span>Light</span></div>
+      </div>
+    </section>
 
     <div class="card">
-      <h2>⏰ Today's light</h2>
-      <div id="dayBar" class="daybar"></div>
-      <div class="grid">
-        <div><div class="k">🌅 Sunrise</div><div class="v" id="rise">–</div></div>
-        <div><div class="k">🌇 Sunset</div><div class="v" id="set">–</div></div>
-        <div><div class="k">✨ Golden AM</div><div class="v" id="goldAM">–</div></div>
-        <div><div class="k">✨ Golden PM</div><div class="v" id="goldPM">–</div></div>
-        <div><div class="k">💙 Blue AM</div><div class="v" id="blueAM">–</div></div>
-        <div><div class="k">💙 Blue PM</div><div class="v" id="bluePM">–</div></div>
+      <h2>⏰ Today's light <span class="hint2">tap to jump</span></h2>
+      <div class="daybarwrap"><div id="dayBar" class="daybar"></div><div id="dayNeedle" class="needle"></div></div>
+      <div class="moments">
+        <button class="mom blue" data-at="dawn"><i>💙</i><b id="blueAM">–</b><span>Blue hour</span></button>
+        <button class="mom rise" data-at="sunrise"><i>🌅</i><b id="rise">–</b><span>Sunrise</span></button>
+        <button class="mom gold" data-at="sunrise"><i>✨</i><b id="goldAM">–</b><span>Golden hour</span></button>
+        <button class="mom gold" data-at="goldenHour"><i>✨</i><b id="goldPM">–</b><span>Golden hour</span></button>
+        <button class="mom rise" data-at="sunset"><i>🌇</i><b id="set">–</b><span>Sunset</span></button>
+        <button class="mom blue" data-at="blueStartPM"><i>💙</i><b id="bluePM">–</b><span>Blue hour</span></button>
       </div>
       <div id="hills" class="hills note">⛰️ Checking hills around you…</div>
     </div>
 
     <div class="card">
-      <h2>🌤️ Hour-by-hour forecast</h2>
-      <div id="wxNow" class="note">Loading…</div>
-      <div id="hours"></div>
-      <div class="hl"><span>12am</span><span>6am</span><span>12pm</span><span>6pm</span><span>11pm</span></div>
-      <div class="legend"><i style="background:var(--good)"></i>Sunny <i style="background:var(--mid)"></i>Some cloud <i style="background:var(--grey)"></i>Overcast <i style="background:var(--blue)"></i>Rain</div>
-      <div class="conf">
-        <div class="k">How sure is the forecast? <span class="note">(3 weather models compared)</span></div>
-        <div id="confBar" class="confbar"></div>
-        <div id="confNow" class="note"></div>
-        <div id="bestWindow" class="best"></div>
-      </div>
+      <div class="row between"><h2>🌤️ Hour by hour</h2><span id="wxNow" class="note"></span></div>
+      <div id="hours" class="hours"></div>
+      <div id="bestWindow" class="best"></div>
+      <div id="confNow" class="note confline"></div>
+      <div class="legend">Dots: how sure the forecast is <i class="c3"></i>sure <i class="c2"></i>fairly <i class="c1"></i>unsure</div>
+      <button id="fxBtn" class="link fxbtn">🌧️ Rain &amp; storm animation: on</button>
+    </div>
+
+    <div class="card sat">
+      <div class="row between"><h2>🛰️ Right now, from space</h2><button id="liveRefresh" class="link">↻ refresh</button></div>
+      <div id="liveSky" class="live">Checking the latest satellite image…</div>
     </div>
 
     <details class="card">
@@ -156,8 +158,8 @@
       <div id="facadeInfo" class="note"></div>
     </details>
 
-    <div class="card">
-      <h2>⭐ Your places &amp; fixes</h2>
+    <details class="card">
+      <summary><h2>⭐ Your places &amp; building fixes</h2></summary>
       <div id="placesList" class="places"></div>
       <div id="fixCount" class="note">No fixes yet. In 3D, click any building to correct it.</div>
       <div class="row" style="margin-top:8px">
@@ -165,7 +167,7 @@
         <label class="pill small" style="cursor:pointer">📂 Load file<input id="fixImport" type="file" accept=".json,application/json" hidden></label>
       </div>
       <div class="note" style="margin-top:6px">Share the file with your crew so everyone sees the same corrected street.</div>
-    </div>
+    </details>
 
     <div class="credits"><b id="appVersion">Sun Scout</b> · Sun math: SunCalc · Forecast: Open-Meteo · Live clouds: EUMETSAT Meteosat (Indian Ocean) · Radar: RainViewer · Buildings: © OpenStreetMap via OpenFreeMap · Imagery: Esri · Elevation: AWS Terrain Tiles (Mapzen) · Trees: detected from imagery</div>
   </aside>
@@ -184,6 +186,19 @@
       </div>
     </div>
   </footer>
+</div>
+<div id="welcome" class="welcome hidden" role="dialog" aria-label="Welcome">
+  <div class="wcard">
+    <div class="wsky"><div class="wsun"></div></div>
+    <h3>Welcome to Sun Scout</h3>
+    <p>See where the sun will be, for any place and any time.</p>
+    <div class="steps">
+      <div><i>🔎</i><b>Find your spot</b><span>Search, tap 📍 or tap the map</span></div>
+      <div><i>☀️</i><b>Slide the time</b><span>Watch the sun and shadows move</span></div>
+      <div><i>🏙️</i><b>Step inside in 3D</b><span>Real buildings, your lens</span></div>
+    </div>
+    <button id="welcomeGo" class="pill hero">Let's go</button>
+  </div>
 </div>
 <script type="module" src="app.js"></script>
 </body>
