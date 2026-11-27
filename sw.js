@@ -1,6 +1,6 @@
 // Sun Scout service worker: opens fast on 4G, keeps the app (and places you've looked at) available with a weak signal.
 // Bump VERSION whenever you upload a new version of the app files.
-const VERSION = 'sunscout-v8';
+const VERSION = 'sunscout-v9';
 const SHELL = ['./', './index.html', './style.css', './app.js', './scene3d.js', './terrain.js', './fx.js', './ar.js', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png', './icons/favicon-32.png'];
 const LIBS = 'sunscout-libs-v1', TILES = 'sunscout-tiles-v1', MAX_TILES = 1500;
@@ -14,9 +14,13 @@ self.addEventListener('install', e => {
     await c.addAll(SHELL.map(u => new Request(u, { cache: 'reload' })));
     const libs = await caches.open(LIBS);
     await Promise.all(LIB_URLS.map(async u => { if (!(await libs.match(u))) { try { const r = await fetch(u, { mode: 'cors' }); if (r.ok) await libs.put(u, r); } catch { /* fetched later */ } } }));
-    await self.skipWaiting();
+    // From 1.9 on, the app shows "New version, tap to update" and tells us when. Copies older than that (v8 and before)
+    // have no such button, so they get this one update straight away, as before.
+    const old = (await caches.keys()).some(k => /^sunscout-v[1-8]$/.test(k));
+    if (old) await self.skipWaiting();
   })());
 });
+self.addEventListener('message', e => { if (e.data === 'update-now') self.skipWaiting(); });
 self.addEventListener('activate', e => {
   e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k.startsWith('sunscout-v') && k !== VERSION).map(k => caches.delete(k)))).then(() => self.clients.claim()));
 });

@@ -40,7 +40,7 @@ export class ARView {
   // must be called straight from a tap (iPhone only allows camera / motion access from one)
   open() {
     this.root.classList.remove('hidden'); document.body.classList.add('arOn');
-    this.size(); this.gotSensor = false; this.manual = false; this.axes = null; this.yawFix = 0; this.aligning = false; this.relative = false;
+    this.size(); this.gotSensor = false; this.manual = false; this.axes = null; this.yawFix = 0; this.aligning = false; this.relative = false; this.iosOff = null; this.warned = false;
     this.slider.value = this.getTime();
     this.msg('Starting camera…');
     const cam = navigator.mediaDevices?.getUserMedia
@@ -86,15 +86,29 @@ export class ARView {
   }
 
   handle(e) {
-    if (e.alpha == null) return;
+    if (e.alpha == null || e.beta == null) return;
     let a = e.alpha;
-    if (e.webkitCompassHeading != null) a = 360 - e.webkitCompassHeading;   // iPhone: true compass heading
-    else if (!e.absolute && this.evt === 'deviceorientation') this.relative = true; // no north reference: Align fixes it
+    if (e.webkitCompassHeading != null && e.webkitCompassHeading >= 0) {
+      // iPhone: the tilt sensors are smooth but don't know north; the compass knows north but is jumpy (worst when the phone
+      // is held upright). So keep the smooth sensors and only slowly learn how far they are from true north.
+      const off = (360 - e.webkitCompassHeading) - e.alpha;
+      if (this.iosOff == null) this.iosOff = off;
+      else this.iosOff += (((off - this.iosOff + 540) % 360) - 180) * (Math.abs(e.beta) < 45 ? 0.04 : 0.008);
+      a = e.alpha + this.iosOff;
+      this.unsure = e.webkitCompassAccuracy > 25;
+    } else if (!e.absolute && this.evt === 'deviceorientation') this.relative = true; // no north reference: Align fixes it
     const ax = axesFrom(a, e.beta, e.gamma);
     if (!this.gotSensor) { this.gotSensor = true; this.manual = false; this.axes = ax; if (this.relative) { this.aligning = true; } this.hint(); return; }
-    // smooth out the jitter
-    const k = 0.25;
-    for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) this.axes[i][j] += (ax[i][j] - this.axes[i][j]) * k;
+    // smooth out the shake: small wobbles are damped hard, real turns follow quickly
+    const [X0, , Z0] = this.axes, [X1, , Z1] = ax;
+    const turn = Math.acos(clamp(dot(Z0, Z1), -1, 1)) / D;
+    const k = clamp(turn / 10, 0.05, 0.6);
+    const norm = v => { const n = Math.hypot(...v) || 1; return v.map(c => c / n); };
+    const Z = norm(Z0.map((c, i) => c + (Z1[i] - c) * k));
+    let X = X0.map((c, i) => c + (X1[i] - c) * k); const xz = dot(X, Z); X = norm(X.map((c, i) => c - xz * Z[i]));
+    const Y = [Z[1] * X[2] - Z[2] * X[1], Z[2] * X[0] - Z[0] * X[2], Z[0] * X[1] - Z[1] * X[0]];
+    this.axes = [X, Y, Z];
+    if (this.unsure && !this.aligning && !this.warned) { this.warned = true; this.msg('Compass unsure: wave the phone in a figure-8, or tap 🎯 Align.'); clearTimeout(this.hintT); this.hintT = setTimeout(() => this.msg(''), 5000); }
   }
   // device axes, after the user's alignment nudge
   frame() {

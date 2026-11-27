@@ -27,6 +27,7 @@ const state = {
   offset: 19800,            // seconds from UTC at the location (from the forecast API)
   date: '', minutes: 0,     // local date (YYYY-MM-DD) + minutes after local midnight
   weather: null, view: 'map', useWx: true, horizon: null, hill: null,
+  live: true,               // following the real clock (until you pick another time)
 };
 
 // reopen where you were last time (handy on the phone)
@@ -48,6 +49,7 @@ const sunBlocked = d => { const h = state.horizon; if (!h) return false; const p
 const compass = b => ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][Math.round(((b % 360) + 360) % 360 / 45) % 8];
 
 function setNow() {
+  state.live = true;
   const p = localParts(new Date());
   state.date = `${p.y}-${pad2(p.m + 1)}-${pad2(p.d)}`;
   state.minutes = p.h * 60 + p.min;
@@ -327,7 +329,7 @@ async function loadWeather() {
     const changed = state.offset !== j.utc_offset_seconds;
     state.weather = j; state.offset = j.utc_offset_seconds; $('wxNow').textContent = '';
     loadModels(); loadGlow();
-    if (changed) setNow();
+    if (changed && state.live) { setNow(); onDayChange(); }
   } catch (e) { state.weather = null; $('wxNow').textContent = 'Forecast unavailable: ' + e.message; }
   update();
 }
@@ -546,12 +548,14 @@ function buildChips() {
   $('chips').innerHTML = '';
   list.forEach(([label, d]) => {
     const b = document.createElement('button'); b.textContent = label;
-    b.onclick = () => { stopPlay(); if (!d) { setNow(); onDayChange(); } else { state.minutes = clamp(Math.round(minutesOf(d)), 0, 1439); $('t').value = state.minutes; update(); } };
+    b.onclick = () => { stopPlay(); if (!d) { setNow(); onDayChange(); } else { state.live = false; state.minutes = clamp(Math.round(minutesOf(d)), 0, 1439); $('t').value = state.minutes; update(); } };
     $('chips').appendChild(b);
   });
+  $('chips').firstChild.classList.add('nowchip');
 }
 
 function update() {
+  $('chips').firstChild?.classList.toggle('live', state.live);
   const d = selected(), p = sunAt(d), a = deg(p.altitude), b = bearingOf(p.azimuth);
   $('tLabel').textContent = fmt(d);
   $('az').textContent = `${compass(b)} ${b.toFixed(0)}°`;
@@ -628,7 +632,7 @@ function update() {
 // ───────────────────────── visuals: animated sky card, hour strip, weather effects ─────────────────────────
 const lsGet = k => { try { return localStorage.getItem(k); } catch { return null; } };
 const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch { /* storage blocked */ } };
-const jumpTo = m => { stopPlay(); state.minutes = clamp(Math.round(m), 0, 1439); $('t').value = state.minutes; update(); };
+const jumpTo = m => { stopPlay(); state.live = false; state.minutes = clamp(Math.round(m), 0, 1439); $('t').value = state.minutes; update(); };
 const sky = new SkyCard($('sky'), { onScrub: m => { jumpTo(m); if (!lsGet('sunscout-skyhint')) { lsSet('sunscout-skyhint', '1'); $('skyHint').classList.add('gone'); } } });
 if (lsGet('sunscout-skyhint')) $('skyHint').classList.add('gone');
 document.querySelectorAll('.mom').forEach(m => m.onclick = () => { const v = sunTimes()[m.dataset.at]; if (!isNaN(v)) jumpTo(minutesOf(v) + 1); });
@@ -899,13 +903,14 @@ $('q').addEventListener('keydown', async e => {
 $('go').onclick = async () => { clearTimeout(sugTimer); const list = await suggest(true); if (list && list.length) pick(list[0]); };
 
 // ───────────────────────── time controls ─────────────────────────
-$('t').oninput = () => { stopPlay(); state.minutes = Number($('t').value); update(); };
-$('date').onchange = () => { if ($('date').value) { state.date = $('date').value; onDayChange(); } };
+$('t').oninput = () => { stopPlay(); state.live = false; state.minutes = Number($('t').value); update(); };
+$('date').onchange = () => { if ($('date').value) { state.live = false; state.date = $('date').value; onDayChange(); } };
 $('facade').oninput = update;
 let playTimer = null;
 function stopPlay() { clearInterval(playTimer); playTimer = null; $('play').textContent = '▶'; }
 $('play').onclick = () => {
   if (playTimer) return stopPlay();
+  state.live = false;
   const t = sunTimes();
   if (state.minutes >= minutesOf(t.dusk) || state.minutes < minutesOf(t.dawn) - 30) state.minutes = Math.max(0, Math.round(minutesOf(t.dawn)) - 20);
   $('play').textContent = '⏸';
@@ -1125,17 +1130,45 @@ $('installBtn').onclick = async () => { if (!installEvt) return; installEvt.prom
 $('installClose').onclick = () => { $('installBar').classList.add('hidden'); try { localStorage.setItem('sunscout-install-dismissed', '1'); } catch { /* no storage */ } };
 // keep the installed app up to date: look for a new version on open and whenever you come back to it,
 // and reload once when it arrives (only if an older version was running)
-const APP_VERSION = 'v8';
+const APP_VERSION = '1.9';
+const WHATS_NEW = ['Opens at the real time, and keeps up with the clock', 'Steadier AR view', 'New versions now arrive with an Update button'];
+let swReg = null;
+function showUpdate() {
+  const box = $('updateBar'); if (!box || !box.classList.contains('hidden')) return;
+  box.classList.remove('hidden');
+}
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
   const hadController = !!navigator.serviceWorker.controller;
   let reloaded = false;
   navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController && !reloaded) { reloaded = true; location.reload(); } });
   navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(reg => {
+    swReg = reg;
+    const watch = w => w && w.addEventListener('statechange', () => { if (w.state === 'installed' && navigator.serviceWorker.controller) showUpdate(); });
+    if (reg.waiting && navigator.serviceWorker.controller) showUpdate();
+    watch(reg.installing);
+    reg.addEventListener('updatefound', () => watch(reg.installing));
     const check = () => reg.update().catch(() => {});
     check();
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') check(); });
   }).catch(() => {});
 }
+$('updateGo').onclick = () => {
+  $('updateGo').textContent = 'Updating…';
+  if (swReg?.waiting) swReg.waiting.postMessage('update-now'); else location.reload();
+  setTimeout(() => location.reload(), 4000);   // in case the switch-over message gets lost
+};
+$('updateLater').onclick = () => $('updateBar').classList.add('hidden');
+// first open after an update: say what's new, once
+(() => {
+  const seen = lsGet('sunscout-version');
+  lsSet('sunscout-version', APP_VERSION);
+  if (seen === APP_VERSION || !lsGet('sunscout-welcomed')) return;   // brand-new visitors get the welcome card instead
+  $('newsVer').textContent = APP_VERSION;
+  $('newsList').innerHTML = WHATS_NEW.map(t => `<li>${t}</li>`).join('');
+  $('newsBar').classList.remove('hidden');
+  $('newsOk').onclick = () => $('newsBar').classList.add('hidden');
+  setTimeout(() => $('newsBar').classList.add('hidden'), 12000);
+})();
 $('appVersion').textContent = `Sun Scout ${APP_VERSION}`;
 if (standalone) track('opened the installed app');
 
@@ -1149,6 +1182,25 @@ if (standalone) track('opened the installed app');
   $('q').value = oneLine(shared);
   setTimeout(() => { $('q').focus(); suggest(true); }, 400);
 })();
+
+// ───────────────────────── live clock ─────────────────────────
+// Opening the app (or coming back to it) always shows the real time now. It keeps ticking until you pick another time;
+// tap "Now" to follow the clock again.
+function followClock() {
+  if (!state.live || playTimer) return;
+  const before = state.date; setNow();
+  if (state.date !== before) onDayChange(); else update();
+}
+setInterval(() => { if (document.visibilityState === 'visible') followClock(); }, 20000);
+let hiddenAt = 0;
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') { hiddenAt = Date.now(); return; }
+  const away = hiddenAt ? Date.now() - hiddenAt : 0;
+  if (away > 5 * 60000) state.live = true;              // back after a while: show the real time again
+  followClock();
+  if (away > 30 * 60000) { loadWeather(); checkLiveSky(); }   // and a fresh forecast
+});
+addEventListener('pageshow', e => { if (e.persisted) { state.live = true; followClock(); } });
 
 // ───────────────────────── start ─────────────────────────
 if (state.label !== 'Gateway of India, Mumbai') $('place').textContent = '📍 ' + (state.label || `${state.lat.toFixed(5)}, ${state.lng.toFixed(5)}`);

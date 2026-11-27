@@ -209,6 +209,17 @@
   <div class="armsg hidden"></div>
   <div class="arbot"><div class="arlegend"><i class="lb"></i>blue hour <i class="lg"></i>golden <i class="ly"></i>sun path <i class="lm"></i>moon <i class="lh"></i>hills</div><input type="range" min="0" max="1439" step="1" aria-label="Time"></div>
 </div>
+<div id="updateBar" class="update hidden" role="alert">
+  <div class="uico">✨</div>
+  <div class="utxt"><b>A new version of Sun Scout is ready</b><span>Tap to update. It takes a second.</span></div>
+  <button id="updateGo" class="pill hero">Update</button>
+  <button id="updateLater" class="link" aria-label="Later">✕</button>
+</div>
+<div id="newsBar" class="update news hidden" role="status">
+  <div class="uico">🎉</div>
+  <div class="utxt"><b>Updated to Sun Scout <span id="newsVer"></span></b><ul id="newsList"></ul></div>
+  <button id="newsOk" class="link" aria-label="Close">✕</button>
+</div>
 <div id="welcome" class="welcome hidden" role="dialog" aria-label="Welcome">
   <div class="wcard">
     <div class="wsky"><div class="wsun"></div></div>
