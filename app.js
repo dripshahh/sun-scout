@@ -31,8 +31,13 @@ const state = {
 };
 
 const openedWithLink = !!location.search.replace(/^\?v=\d+$/, '').replace(/^\?$/, '');   // a shared place: go there, not to your location
-// reopen where you were last time (handy on the phone)
-try { const last = JSON.parse(localStorage.getItem('sunscout-last') || 'null'); if (last && isFinite(last.lat) && isFinite(last.lng)) Object.assign(state, { lat: last.lat, lng: last.lng, label: last.label || '' }); } catch { /* no storage */ }
+// Until we know where you are, the app shows all of India from the satellite (no random city).
+// It only reopens your last spot on the reload right after tapping "Update".
+const INDIA = { lat: 21.1466, lng: 79.0889, bounds: [[7.5, 68.5], [35.0, 97.0]] };
+let resumeAfterUpdate = false;
+try { resumeAfterUpdate = sessionStorage.getItem('sunscout-skip-landing') === '1'; } catch { /* private mode */ }
+Object.assign(state, { lat: INDIA.lat, lng: INDIA.lng, label: 'India', noSpot: true });
+if (resumeAfterUpdate) try { const last = JSON.parse(localStorage.getItem('sunscout-last') || 'null'); if (last && isFinite(last.lat) && isFinite(last.lng)) Object.assign(state, { lat: last.lat, lng: last.lng, label: last.label || '', noSpot: false }); } catch { /* no storage */ }
 
 // ───────────────────────── time helpers (everything shown in the location's local time) ─────────────────────────
 const localParts = d => { const x = new Date(d.getTime() + state.offset * 1000); return { y: x.getUTCFullYear(), m: x.getUTCMonth(), d: x.getUTCDate(), h: x.getUTCHours(), min: x.getUTCMinutes() }; };
@@ -47,6 +52,7 @@ const sunAt = d => SunCalc.getPosition(d, state.lat, state.lng);
 const bearingOf = az => (deg(az) + 180 + 360) % 360; // SunCalc azimuth is measured from south
 // true when the sun is up but hidden behind hills (needs the terrain horizon)
 const sunBlocked = d => { const h = state.horizon; if (!h) return false; const p = sunAt(d), a = deg(p.altitude); return a > -1 && a + (state.sunOff || 0) < h.prof[Math.round(bearingOf(p.azimuth)) % 360]; };
+const placeText = () => state.noSpot ? '🇮🇳 India · tap the map, search, or tap 📍 Find me' : '📍 ' + (state.label || `${state.lat.toFixed(5)}, ${state.lng.toFixed(5)}`);
 const compass = b => ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][Math.round(((b % 360) + 360) % 360 / 45) % 8];
 
 function setNow() {
@@ -59,7 +65,8 @@ function setNow() {
 }
 
 // ───────────────────────── map ─────────────────────────
-const map = L.map('map', { zoomControl: true }).setView([state.lat, state.lng], 17);
+const map = L.map('map', { zoomControl: true, zoomSnap: 0.25 });
+if (state.noSpot) map.fitBounds(INDIA.bounds); else map.setView([state.lat, state.lng], 17);
 L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Imagery © Esri, Maxar' }).addTo(map);
 L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19 }).addTo(map);
 map.createPane('clouds').style.zIndex = 450;
@@ -72,6 +79,7 @@ function pointAt(bearing, px) {
 function drawSunOnMap() {
   if (state.view !== 'map') return;
   sunLayer.clearLayers();
+  if (state.noSpot) return;   // looking at all of India: nothing to draw until you pick a spot
   if (map.getZoom() < 12) {   // zoomed out (e.g. watching clouds): just mark the spot
     L.circleMarker([state.lat, state.lng], { radius: 7, color: '#fff', fillColor: '#e5604d', fillOpacity: 1, weight: 2 }).addTo(sunLayer);
     return;
@@ -116,7 +124,9 @@ map.on('click', e => {
     setTimeout(() => { $('place').textContent = '📍 ' + name; }, 5000);
     return;
   }
+  if (map.getZoom() < 11) map.flyTo([lat, lng], 16, { duration: 1.8 });   // tapped the big map: glide down to it
   setLocation(lat, lng, null);
+  nameHere(lat, lng, false);
 });
 function startPickMode(name, nearArea) {
   name = (name || '').trim().slice(0, 80); if (!name) return;
@@ -784,7 +794,7 @@ function onDayChange() { computeHillTimes(); sliderGradient(); buildChips(); if 
 // ───────────────────────── location ─────────────────────────
 function setLocation(lat, lng, label, keepHint) {
   if (!keepHint) state.kindHint = null;
-  state.lat = lat; state.lng = lng; state.label = label;
+  state.lat = lat; state.lng = lng; state.label = label; state.noSpot = false; $('findMe').classList.remove('pulse'); $('savePlace').classList.remove('hidden');
   $('place').textContent = '📍 ' + (label || `${lat.toFixed(5)}, ${lng.toFixed(5)}`);
   try { localStorage.setItem('sunscout-last', JSON.stringify({ lat, lng, label })); } catch { /* no storage */ }
   sliderGradient(); buildChips(); update();
@@ -1012,7 +1022,7 @@ function setTabs(view) {
   if (view !== 'map') track(view === 'orbit' ? 'opened 3D' : 'opened Street view');
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.dataset.view === view));
   const own3d = view === 'orbit' || view === 'street';
-  $('map').classList.toggle('hidden', view !== 'map'); $('mapTools').classList.toggle('hidden', view !== 'map');
+  $('map').classList.toggle('hidden', view !== 'map'); $('mapTools').classList.toggle('hidden', view !== 'map'); $('findMe').classList.toggle('hidden', view !== 'map');
   $('scene').classList.toggle('hidden', !own3d); $('sceneTools').classList.toggle('hidden', !own3d);
   $('sceneHint').classList.toggle('hidden', view === 'map');
   $('pad').classList.toggle('hidden', view !== 'street' || !matchMedia('(pointer: coarse)').matches);
@@ -1032,6 +1042,7 @@ function setTabs(view) {
   updateFX();
 }
 async function switchView(view) {
+  if (view !== 'map' && state.noSpot) { toast('📍 Pick a spot first: tap the map, search, or tap Find me.', 4500); $('findMe').classList.add('pulse'); return; }
   setTabs(view);
   if (view === 'map') return;
   try {
@@ -1168,37 +1179,43 @@ function locateMe(quiet) {
     navigator.geolocation.getCurrentPosition(p => {
       lsSet('sunscout-loc', 'yes');
       const { latitude: lat, longitude: lng } = p.coords;
-      map.setView([lat, lng], 17, { animate: false });
+      if (state.view === 'map') map.flyTo([lat, lng], 17, { duration: map.getZoom() < 10 ? 2.8 : 1.2 }); else map.setView([lat, lng], 17, { animate: false });
       setLocation(lat, lng, 'Your location');
       nameHere(lat, lng);
       done(true);
     }, err => {
       if (err.code === 1) lsSet('sunscout-loc', 'no');
-      $('place').textContent = quiet ? '📍 ' + (state.label || `${state.lat.toFixed(5)}, ${state.lng.toFixed(5)}`)
+      $('place').textContent = quiet ? placeText()
         : err.code === 1 ? '📍 Location is blocked. Allow it for this site in your browser settings, or search instead.' : '📍 Could not find your location. Try again outside, or search instead.';
       done(false);
     }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
   });
 }
 // "Your location" → the name of the area (e.g. "Kilpauk, Chennai")
-async function nameHere(lat, lng) {
+async function nameHere(lat, lng, here = true) {
   try {
     const j = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat.toFixed(5)}&lon=${lng.toFixed(5)}&zoom=16&accept-language=en`).then(r => r.json());
     const a = j.address || {}, area = a.neighbourhood || a.suburb || a.quarter || a.village || a.city_district || a.road, city = a.city || a.town || a.county || a.state_district || a.state;
     const name = [area, city].filter((v, i, l) => v && l.indexOf(v) === i).join(', ');
     if (!name || state.lat !== lat || state.lng !== lng) return;
-    state.label = name; $('place').textContent = `📍 ${name} · you are here`;
+    state.label = name; $('place').textContent = `📍 ${name}${here ? ' · you are here' : ''}`;
     lsSet('sunscout-last', JSON.stringify({ lat, lng, label: name }));
   } catch { /* keep "Your location" */ }
 }
-$('locate').onclick = () => { track('used my location'); locateMe(false); };
+$('locate').onclick = () => { track('used my location'); askLocation(true); };
+$('findMe').onclick = () => { track('find me'); askLocation(true); };
+$('findMe').classList.toggle('pulse', !!state.noSpot);
+$('savePlace').classList.toggle('hidden', !!state.noSpot);
 // on open: go to where you are if you've allowed it; otherwise ask once, nicely (and not again for 3 days if you say not now)
-async function askLocation() {
+async function askLocation(force) {
   let st = 'prompt';
   try { st = (await navigator.permissions.query({ name: 'geolocation' })).state; } catch { /* older browsers: ask */ }
   if (st === 'granted' || (st === 'prompt' && lsGet('sunscout-loc') === 'yes')) { await locateMe(true); return; }
-  if (st === 'denied' || !navigator.geolocation) return;
-  if (Date.now() - Number(lsGet('sunscout-loc-later') || 0) < 3 * 864e5) return;
+  if (st === 'denied' || !navigator.geolocation) {
+    if (force) toast(navigator.geolocation ? '📍 Location is blocked for this site. Allow it in your browser\'s site settings, or search for a place.' : '📍 This browser can\'t share your location. Search for a place instead.', 6000);
+    return;
+  }
+  if (!force && Date.now() - Number(lsGet('sunscout-loc-later') || 0) < 3 * 864e5) return;
   return new Promise(done => {
     $('locAsk').classList.remove('hidden');
     $('locYes').onclick = async () => { $('locAsk').classList.add('hidden'); track('allowed location'); await locateMe(false); done(); };
@@ -1220,8 +1237,8 @@ $('installBtn').onclick = async () => { if (!installEvt) return; installEvt.prom
 $('installClose').onclick = () => { $('installBar').classList.add('hidden'); try { localStorage.setItem('sunscout-install-dismissed', '1'); } catch { /* no storage */ } };
 // keep the installed app up to date: look for a new version on open and whenever you come back to it,
 // and reload once when it arrives (only if an older version was running)
-const APP_VERSION = '2.4';
-const WHATS_NEW = ['A redesigned welcome page that looks great on phones, tablets and computers', 'Opens right where you are (after you allow location)', 'More accurate weather: three forecasts blended, plus live satellite and radar'];
+const APP_VERSION = '2.5';
+const WHATS_NEW = ['New 📍 Find me button: flies straight to where you are', 'Without your location, the app now opens on a satellite view of India', 'A redesigned welcome page for phones and computers'];
 let swReg = null;
 function showUpdate() {
   const box = $('updateBar'); if (!box || !box.classList.contains('hidden')) return;
@@ -1296,7 +1313,7 @@ document.addEventListener('visibilitychange', () => {
 addEventListener('pageshow', e => { if (e.persisted) { state.live = true; followClock(); } });
 
 // ───────────────────────── start ─────────────────────────
-if (state.label !== 'Gateway of India, Mumbai') $('place').textContent = '📍 ' + (state.label || `${state.lat.toFixed(5)}, ${state.lng.toFixed(5)}`);
+$('place').textContent = placeText();
 setNow();
 onDayChange();
 loadWeather();

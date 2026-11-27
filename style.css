@@ -412,3 +412,11 @@ body.lockscroll { overflow:hidden; }
   .lend .pill { padding:15px 40px; font-size:17px; }
 }
 @media (max-width:420px) { .lnavgo { padding:7px 12px; font-size:13px; } }
+/* 📍 Find me (top-right of the map) */
+.findme { position:absolute; top:12px; right:12px; z-index:520; display:flex; align-items:center; gap:6px; padding:9px 15px; border-radius:999px;
+  background:var(--sun); color:#1b1300; border:0; font-weight:800; font-size:14px; box-shadow:0 6px 18px rgba(0,0,0,.45); }
+.findme.pulse { animation:findpulse 1.8s ease-out infinite; }
+@keyframes findpulse { 0% { box-shadow:0 0 0 0 rgba(255,176,46,.75), 0 6px 18px rgba(0,0,0,.45); } 100% { box-shadow:0 0 0 16px rgba(255,176,46,0), 0 6px 18px rgba(0,0,0,.45); } }
+#mapTools { right:132px; }
+@media (max-width:820px) { .findme { top:8px; right:8px; padding:8px 12px; font-size:13px; } #mapTools { right:112px; } }
+@media (prefers-reduced-motion: reduce) { .findme.pulse { animation:none; } }
