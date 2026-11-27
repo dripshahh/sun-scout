@@ -1220,8 +1220,8 @@ $('installBtn').onclick = async () => { if (!installEvt) return; installEvt.prom
 $('installClose').onclick = () => { $('installBar').classList.add('hidden'); try { localStorage.setItem('sunscout-install-dismissed', '1'); } catch { /* no storage */ } };
 // keep the installed app up to date: look for a new version on open and whenever you come back to it,
 // and reload once when it arrives (only if an older version was running)
-const APP_VERSION = '2.2';
-const WHATS_NEW = ['Opens right where you are (after you allow location)', 'More accurate weather: three forecasts blended, plus live satellite and radar for right now', 'A new About page: tap About at the bottom'];
+const APP_VERSION = '2.3';
+const WHATS_NEW = ['Sun Scout now opens with its welcome page every time', 'Opens right where you are (after you allow location)', 'More accurate weather: three forecasts blended, plus live satellite and radar'];
 let swReg = null;
 function showUpdate() {
   const box = $('updateBar'); if (!box || !box.classList.contains('hidden')) return;
@@ -1244,6 +1244,7 @@ if ('serviceWorker' in navigator && location.protocol === 'https:') {
 }
 $('updateGo').onclick = () => {
   $('updateGo').textContent = 'Updating…';
+  try { sessionStorage.setItem('sunscout-skip-landing', '1'); } catch { /* fine */ }
   if (swReg?.waiting) swReg.waiting.postMessage('update-now'); else location.reload();
   setTimeout(() => location.reload(), 4000);   // in case the switch-over message gets lost
 };
@@ -1326,19 +1327,28 @@ function showLanding() {
   };
   cancelAnimationFrame(lskyRaf); lskyRaf = requestAnimationFrame(frame);
 }
+function hideLanding() { $('landing').classList.add('hidden'); document.body.classList.remove('lockscroll'); cancelAnimationFrame(lskyRaf); }
+let landingDone = false;
 document.querySelectorAll('#landing [data-tour]').forEach(b => b.onclick = async () => {
   const tour = b.dataset.tour === '1';
-  $('landing').classList.add('hidden'); document.body.classList.remove('lockscroll'); cancelAnimationFrame(lskyRaf);
-  lsSet('sunscout-welcomed', '1'); track(tour ? 'landing: tour' : 'landing: open app');
+  hideLanding(); lsSet('sunscout-welcomed', '1'); track(tour ? 'landing: tour' : 'landing: open app');
   window.scrollTo(0, 0);
-  await askLocation();
+  if (!landingDone && !openedWithLink) await askLocation();   // a shared place stays on that place
+  landingDone = true;
   if (tour) runTour();
 });
 $('aboutBtn').onclick = () => { track('opened about'); showLanding(); };
+// The landing page greets everyone, every time the app is opened (it's already on screen from the HTML, so the app
+// never flashes first). The one exception: the reload right after tapping "Update", which goes straight back in.
 (() => {
-  if (openedWithLink) { lsSet('sunscout-welcomed', '1'); return; }   // opened from a shared link: go there, don't redirect
-  if (!lsGet('sunscout-welcomed') && !standalone) showLanding();
-  else { lsSet('sunscout-welcomed', '1'); askLocation(); }
+  let skip = false;
+  try { skip = sessionStorage.getItem('sunscout-skip-landing') === '1'; sessionStorage.removeItem('sunscout-skip-landing'); } catch { /* private mode */ }
+  if (skip) { hideLanding(); landingDone = true; askLocation(); return; }
+  showLanding();
 })();
+// coming back to the app after a long break counts as opening it again
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && hiddenAt && Date.now() - hiddenAt > 30 * 60000 && !document.querySelector('.tour')) showLanding();
+});
 
 window.sunScout = { state, map, get scene() { return scene3d; } }; // handy for debugging in the console
