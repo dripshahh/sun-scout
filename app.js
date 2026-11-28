@@ -458,6 +458,19 @@ function blendModels(x, key) {
   return y;
 }
 // Rain = a real amount is forecast, not just a model's trace of drizzle (those often never reach the ground in the tropics)
+// How much the clouds block the sun (0..1): low and middle cloud both hide it, high cloud only veils it.
+// The satellite, when it has looked at this hour, has the last word.
+function sunCover(x) {
+  if (!x) return 0;
+  const low = (x.low ?? 0) / 100, mid = (x.mid ?? x.cc * 0.6) / 100, high = (x.high ?? 0) / 100;
+  let c = 1 - (1 - low) * (1 - mid) * (1 - 0.35 * high);
+  if (x.mid == null) c = Math.max(c, (x.cc ?? 0) / 100 * 0.8);     // no layer breakdown: lean on the total cloud cover
+  if (x.sat === 'clear') c = Math.min(c, 0.15);
+  else if (x.sat === 'thick') c = Math.max(c, 0.88);
+  else if (x.sat === 'thin') c = Math.max(c, 0.3);   // the satellite sees some cloud but can't tell a thin veil from a grey layer: the forecast layers decide
+  return clamp(c, 0, 1);
+}
+const OVERCAST = 0.7, MOSTLY = 0.45;
 const isRain = x => x && rainKind(x.pr) !== 'none' && rainKind(x.pr) !== 'drizzle';     // a light shower or more
 const maybeDrizzle = x => x && rainKind(x.pr) === 'drizzle' && x.pp >= 25;
 
@@ -502,7 +515,7 @@ function liveFix(x, dayStr, hour) {
 // cloud over the sun at this minute: blended between forecast hours, so the light changes smoothly as you drag the time
 function cloudFactor() {
   if (!state.useWx) return 0;
-  const cf = h => { const x = wxAt(state.date, h); return x ? clamp((0.7 * x.low + 0.3 * x.cc) / 100 + (isRain(x) ? 0.2 : 0), 0, 1) : null; };
+  const cf = h => { const x = wxAt(state.date, h); return x ? clamp(sunCover(x) + (isRain(x) ? 0.2 : 0), 0, 1) : null; };
   const h = state.minutes / 60, h0 = Math.floor(h), a = cf(h0); if (a == null) return 0;
   const b = h0 < 23 ? cf(h0 + 1) : null;
   return b == null ? a : a + (b - a) * (h - h0);
@@ -620,8 +633,10 @@ function score(a, x, blocked) {
     if (k === 'moderate') return [sure ? '🌧️ Moderate rain likely' : '🌧️ Rain possible', `${amt}. Steady rain: bring covers or wait it out.`, '#13243f'];
     return [sure ? '🌧️ Heavy rain likely' : '🌧️ Heavy rain possible', `${amt} · plan indoor or a backup.`, '#101d38'];
   }
-  if (x && x.low >= 70) return ['☁️ Soft, flat light', 'Overcast: no hard shadows, even exposure, kind to skin.', '#23262d'];
-  const some = x && x.low >= 25 ? ' Clouds may pass.' : '';
+  const cover = sunCover(x);
+  if (x && cover >= OVERCAST) return ['☁️ Soft, flat light', 'Overcast: the sun is hidden. No hard shadows, even exposure, kind to skin.', '#23262d'];
+  if (x && cover >= MOSTLY) return ['⛅ Mostly cloudy', 'The sun comes and goes: soft light with short bright spells. Shadows fade in and out.', '#262a31'];
+  const some = x && cover >= 0.25 ? ' Clouds may pass.' : '';
   if (a < 6) return ['🔥 Golden light!', 'Warm, low sun and long shadows. Beauty-shot time.' + some, '#3a2508'];
   if (a < 20) return ['😎 Lovely directional light', 'Low angle with strong texture and shape.' + some, '#2f2810'];
   if (a < 50) return ['🙂 Good daylight', 'Clean, neutral light. Watch for squinting.' + some, '#1f2a1c'];
@@ -635,8 +650,9 @@ function wxIcon(x, up) {
   if (isRain(x)) return '🌧️';
   if (maybeDrizzle(x)) return '🌦️';
   if (x.code === 45 || x.code === 48) return '🌫️';
-  if (x.low >= 70 || x.cc >= 85) return '☁️';
-  if (x.cc >= 35 || x.low >= 25) return up ? '⛅' : '☁️';
+  const cover = sunCover(x);
+  if (cover >= OVERCAST || x.cc >= 85) return '☁️';
+  if (cover >= 0.3 || x.cc >= 35) return up ? '⛅' : '☁️';
   return up ? '☀️' : '🌙';
 }
 // weather at this exact minute for the animations: what it's doing here, blended a little across the hour
@@ -644,7 +660,7 @@ function skyWeather() {
   const x = wxAt(state.date, Math.floor(state.minutes / 60));
   if (!x) return { cloud: 0, rain: 0, snow: false, storm: false, fog: false, x };
   const rain = isRain(x) || maybeDrizzle(x) ? { drizzle: 0.15, light: 0.4, moderate: 0.7, heavy: 1 }[rainKind(x.pr)] : 0;   // a few drops … dense rain
-  return { cloud: clamp((0.6 * x.low + 0.4 * x.cc) / 100, 0, 1), rain, snow: isSnow(x), storm: x.code >= 95, fog: x.code === 45 || x.code === 48, x };
+  return { cloud: sunCover(x), rain, snow: isSnow(x), storm: x.code >= 95, fog: x.code === 45 || x.code === 48, x };
 }
 function sliderGradient() {
   const stops = [], start = dayStartUTC();
@@ -697,9 +713,10 @@ function update() {
   renderHours(t, sel);
 
   const blocked = sunBlocked(d);
-  const L = a > 0 && (blocked || (x && (x.low >= 70 || isRain(x)))) ? [0, '☁️', 'Soft'] : lightOf(a);
+  const cv = sunCover(x);
+  const L = a > 0 && (blocked || (x && (cv >= OVERCAST || isRain(x)))) ? [0, '☁️', 'Soft'] : a > 0 && x && cv >= MOSTLY ? [0, '⛅', 'Soft'] : lightOf(a);
   $('quality').textContent = L[2]; $('lightIco').textContent = L[1];
-  if (blocked) { $('shadow').textContent = '—'; $('shadowBar').setAttribute('width', 0); }
+  if (blocked || (a > 0 && cv >= OVERCAST)) { $('shadow').textContent = '—'; $('shadowBar').setAttribute('width', 0); }   // hills or thick cloud: no hard shadow
   const mo = renderMoon(d); renderGlow();
   const vNow = verdictAt(state.date, sel);
   if (x && vNow) x.rainAgree = vNow.allRain;   // do all three forecasts have rain this hour?
@@ -1300,8 +1317,8 @@ $('installBtn').onclick = async () => { if (!installEvt) return; installEvt.prom
 $('installClose').onclick = () => { $('installBar').classList.add('hidden'); try { localStorage.setItem('sunscout-install-dismissed', '1'); } catch { /* no storage */ } };
 // keep the installed app up to date: look for a new version on open and whenever you come back to it,
 // and reload once when it arrives (only if an older version was running)
-const APP_VERSION = '2.7';
-const WHATS_NEW = ['Rain now shows how much, not just the chance: drizzle, light shower, moderate or heavy', 'See what each forecast says, like "2 say light shower · 1 says dry"', 'Hour by hour shows the chance and the amount in mm'];
+const APP_VERSION = '2.8';
+const WHATS_NEW = ['Cloudy skies are read properly: middle-level cloud now counts, and the satellite has the last word', 'Rain shows how much, not just the chance', 'See what each forecast says, like "2 say light shower · 1 says dry"'];
 let swReg = null;
 function showUpdate() {
   const box = $('updateBar'); if (!box || !box.classList.contains('hidden')) return;

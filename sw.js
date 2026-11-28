@@ -1,6 +1,6 @@
 // Sun Scout service worker: opens fast on 4G, keeps the app (and places you've looked at) available with a weak signal.
 // Bump VERSION whenever you upload a new version of the app files.
-const VERSION = 'sunscout-v18';
+const VERSION = 'sunscout-v19';
 const SHELL = ['./', './index.html', './style.css', './app.js', './scene3d.js', './terrain.js', './fx.js', './tour.js', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png', './icons/favicon-32.png'];
 const LIBS = 'sunscout-libs-v1', TILES = 'sunscout-tiles-v1', MAX_TILES = 1500;
