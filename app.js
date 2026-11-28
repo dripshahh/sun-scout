@@ -362,12 +362,26 @@ let modelSeq = 0;
 async function loadModels() {
   const my = ++modelSeq; state.models = null;
   try {
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${state.lat.toFixed(4)}&longitude=${state.lng.toFixed(4)}&hourly=cloud_cover,cloud_cover_low,precipitation&models=${MODELS.map(m => m[0]).join(',')}&timezone=auto&forecast_days=16`;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${state.lat.toFixed(4)}&longitude=${state.lng.toFixed(4)}&hourly=cloud_cover,cloud_cover_low,precipitation,precipitation_probability&models=${MODELS.map(m => m[0]).join(',')}&timezone=auto&forecast_days=16`;
     const j = await fetch(url).then(r => r.json());
     if (j.error || my !== modelSeq) return;
     state.models = j; update();
   } catch (e) { /* confidence is a bonus: the main forecast still works */ }
 }
+// ── rain by AMOUNT (mm in the hour), not just the chance ──
+const RAIN_STEPS = [[0.1, 'none'], [0.5, 'drizzle'], [2.5, 'light'], [7.5, 'moderate'], [Infinity, 'heavy']];
+const rainKind = mm => (mm == null || !isFinite(mm)) ? 'none' : RAIN_STEPS.find(r => mm < r[0])[1];
+const RAIN_WORD = { none: 'dry', drizzle: 'drizzle', light: 'light shower', moderate: 'moderate rain', heavy: 'heavy rain' };
+const SKY_WORD = { sun: 'sunny', mixed: 'some cloud', cloud: 'overcast' };
+const fmtMm = mm => mm >= 10 ? String(Math.round(mm)) : (Math.round(mm * 10) / 10).toFixed(1);
+// a small rain-intensity icon: 1 drop = drizzle, 2 = light shower, 3 = moderate, 4 = heavy
+function dropsIcon(kind) {
+  const n = { drizzle: 1, light: 2, moderate: 3, heavy: 4 }[kind] || 0; if (!n) return '';
+  const drop = (cx, cy, s) => `<path d="M${cx} ${cy - s}C${cx + s * .75} ${cy - s * .1} ${cx + s * .65} ${cy + s * .75} ${cx} ${cy + s * .75}C${cx - s * .65} ${cy + s * .75} ${cx - s * .75} ${cy - s * .1} ${cx} ${cy - s}Z"/>`;
+  const pos = n === 1 ? [[9, 7]] : n === 2 ? [[5, 5.5], [13, 9]] : n === 3 ? [[4, 5], [14, 5], [9, 10.5]] : [[3.5, 4.5], [10, 3.5], [6.5, 11], [14.5, 10]];
+  return `<svg class="drops ${kind}" viewBox="0 0 18 15" aria-label="${RAIN_WORD[kind]}">${pos.map(([x, y]) => drop(x, y, n >= 3 ? 3.1 : n === 2 ? 3.6 : 4.2)).join('')}</svg>`;
+}
+document.getElementById('rainKey').innerHTML = 'Rain per hour: ' + ['drizzle', 'light', 'moderate', 'heavy'].map(k => `<span class="rk">${dropsIcon(k)}${RAIN_WORD[k]}</span>`).join(' ');
 function modelsAt(dayStr, hour) {
   const m = state.models; if (!m) return [];
   const i = m.hourly.time.indexOf(`${dayStr}T${pad2(hour)}:00`); if (i < 0) return [];
@@ -375,9 +389,22 @@ function modelsAt(dayStr, hour) {
   for (const [id, name] of MODELS) {
     const cc = m.hourly[`cloud_cover_${id}`]?.[i], low = m.hourly[`cloud_cover_low_${id}`]?.[i], pr = m.hourly[`precipitation_${id}`]?.[i];
     if (cc == null || low == null) continue;
-    out.push({ name, cat: (pr ?? 0) > 0.3 ? 'rain' : (low < 25 && cc < 45) ? 'sun' : low < 60 ? 'mixed' : 'cloud' });
+    out.push({ name, short: name.split(' ')[0], mm: pr ?? 0, pp: m.hourly[`precipitation_probability_${id}`]?.[i], kind: rainKind(pr ?? 0),
+      cat: (pr ?? 0) > 0.3 ? 'rain' : (low < 25 && cc < 45) ? 'sun' : low < 60 ? 'mixed' : 'cloud' });
   }
   return out;
+}
+// what each forecast says, in words: "2 say light shower · 1 says dry" (rain words if any forecast has rain, else the sky)
+function verdictAt(dayStr, hour) {
+  const ms = modelsAt(dayStr, hour); if (!ms.length) return null;
+  const wet = ms.some(m => m.kind !== 'none');
+  ms.forEach(m => { m.say = wet ? RAIN_WORD[m.kind] : SKY_WORD[m.cat] || 'some cloud'; });
+  const groups = [];
+  ms.forEach(m => { const g = groups.find(g => g.say === m.say); if (g) g.models.push(m); else groups.push({ say: m.say, models: [m] }); });
+  groups.sort((a, b) => b.models.length - a.models.length);
+  const total = ms.length, top = groups[0].models.length;
+  const text = groups.length === 1 ? `✓ All ${total} say ${groups[0].say}` : groups.map(g => `${g.models.length} say${g.models.length === 1 ? 's' : ''} ${g.say}`).join(' · ');
+  return { groups, total, top, wet, text, allRain: ms.every(m => m.kind !== 'none'), level: groups.length === 1 && total > 1 ? 'c3' : top >= 2 ? 'c2' : 'c1', ms };
 }
 function confidenceAt(dayStr, hour) {
   const ms = modelsAt(dayStr, hour); if (!ms.length) return null;
@@ -389,10 +416,10 @@ function renderConfidence(t) {
   if (!state.models) { $('confNow').textContent = state.weather ? 'Comparing 3 weather models…' : ''; $('bestWindow').textContent = ''; state.best = null; return null; }
   const sel = Math.floor(state.minutes / 60);
   const c = confidenceAt(state.date, sel);
-  if (!c) { $('confNow').textContent = 'Model comparison isn\'t available this far ahead.'; }
-  else if (c.agree === c.total && c.total > 1) $('confNow').innerHTML = `<b>${fmtMin(sel * 60)}</b> · all ${c.total} weather models say <b>${CAT[c.cat]}</b>`;
-  else if (c.agree >= 2) $('confNow').innerHTML = `<b>${fmtMin(sel * 60)}</b> · ${c.agree} of ${c.total} models say <b>${CAT[c.cat]}</b> (${c.odd.map(o => `${o.name.split(' ')[0]}: ${CAT[o.cat]}`).join(', ')})`;
-  else $('confNow').innerHTML = `<b>${fmtMin(sel * 60)}</b> · models disagree (${modelsAt(state.date, sel).map(o => CAT[o.cat]).join(' / ')}). Keep a backup plan.`;
+  const v = verdictAt(state.date, sel);
+  if (!v) { $('confNow').textContent = 'Model comparison isn\'t available this far ahead.'; }
+  else $('confNow').innerHTML = `<b>${fmtMin(sel * 60)}</b> · ` + v.groups.map(g => `${v.groups.length === 1 ? 'all ' : ''}${g.models.length} say${g.models.length === 1 ? 's' : ''} <b>${g.say}</b> (${g.models.map(m => m.short + (v.wet ? ' ' + fmtMm(m.mm) + ' mm' : '')).join(', ')})`).join(' · ')
+    + (v.level === 'c1' ? '. Keep a backup plan.' : '');
 
   // most reliable sunny stretch of daylight today
   const runs = []; let cur = null;
@@ -422,7 +449,7 @@ const median = v => { const a = v.filter(n => n != null && isFinite(n)).sort((p,
 function blendModels(x, key) {
   const m = state.models, j = m ? m.hourly.time.indexOf(key) : -1; if (j < 0) return x;
   const pick = k => MODELS.map(([id]) => m.hourly[`${k}_${id}`]?.[j]);
-  const cc = median([x.cc, ...pick('cloud_cover')]), low = median([x.low, ...pick('cloud_cover_low')]), pr = median([x.pr, ...pick('precipitation')]);
+  const cc = median([x.cc, ...pick('cloud_cover')]), low = median([x.low, ...pick('cloud_cover_low')]), pr = median(pick('precipitation'));   // rain: the middle of the 3 forecasts
   const y = { ...x, cc: Math.round(cc ?? x.cc), low: Math.round(low ?? x.low), pr: pr ?? x.pr };
   const wet = c => (c >= 51 && c <= 67) || (c >= 80 && c <= 82) || c >= 95;
   if (wet(y.code) && y.pr < 0.1) y.code = y.cc >= 85 ? 3 : y.cc >= 40 ? 2 : 1;      // most models say dry
@@ -431,8 +458,8 @@ function blendModels(x, key) {
   return y;
 }
 // Rain = a real amount is forecast, not just a model's trace of drizzle (those often never reach the ground in the tropics)
-const isRain = x => x && (x.pr >= 0.5 || (x.pp >= 60 && x.pr >= 0.3) || (x.pp >= 75 && x.pr >= 0.1));
-const maybeDrizzle = x => x && !isRain(x) && x.pr >= 0.1 && x.pp >= 35;
+const isRain = x => x && rainKind(x.pr) !== 'none' && rainKind(x.pr) !== 'drizzle';     // a light shower or more
+const maybeDrizzle = x => x && rainKind(x.pr) === 'drizzle' && x.pp >= 25;
 
 // ── live rain radar at your spot (RainViewer, free). For the current hour it beats any forecast:
 //    the radar sees the rain that is actually falling. Used wherever there is radar coverage (most of India, Europe, US…).
@@ -582,10 +609,17 @@ function score(a, x, blocked) {
   if (a < -6) return ['🌙 Night', 'The sun is down. Use practicals or city light.', '#141a2e'];
   if (a < 0) return ['💙 Blue hour', 'Soft, cool, shadowless light. Moody city shots.', '#16224a'];
   if (blocked && a > 0) return ['⛰️ Sun behind the hills', 'Up, but hidden by terrain: soft light here. ' + (state.hill?.rise != null && state.minutes < state.hill.rise ? `Direct sun at ${fmtMin(state.hill.rise)}.` : 'No more direct sun today.'), '#1e2a2a'];
-  if (x && x.code >= 95) return ['⛈️ Thunderstorm', `${x.pp}% chance of rain. Plan cover and a backup.`, '#1d1a3a'];
+  if (x && x.code >= 95) return ['⛈️ Thunderstorm', `${x.pp}% chance${x.pr >= 0.1 ? ` · about ${fmtMm(x.pr)} mm this hour` : ''}. Plan cover and a backup.`, '#1d1a3a'];
   if (x?.live === 'rain') return ['🌧️ Raining now', 'Live radar shows rain at your spot. Plan cover or wait it out.', '#13243f'];
-  if (isRain(x)) return ['🌧️ Rain likely', `${x.pp}% chance of rain this hour. Plan cover or a backup.`, '#13243f'];
-  if (maybeDrizzle(x)) return ['🌦️ Maybe a light drizzle', `${x.pp}% chance of a few drops. Keep a rain cover handy.`, '#1b2433'];
+  if (isRain(x) || maybeDrizzle(x)) {
+    const k = rainKind(x.pr), amt = `${x.pp}% chance · about ${fmtMm(x.pr)} mm this hour`;
+    // "likely" only when every forecast has rain and the chance is real; otherwise tone it down
+    const sure = (x.rainAgree == null ? x.pp >= 60 : x.rainAgree) && x.pp >= 50;
+    if (k === 'drizzle') return ['🌦️ Drizzle possible', `${x.pp}% chance · few drops, usually safe to shoot with light cover.`, '#1b2433'];
+    if (k === 'light') return [sure ? '🌦️ Light shower likely' : '🌦️ Shower possible', `${amt}. A short shower, not a washout.`, '#162641'];
+    if (k === 'moderate') return [sure ? '🌧️ Moderate rain likely' : '🌧️ Rain possible', `${amt}. Steady rain: bring covers or wait it out.`, '#13243f'];
+    return [sure ? '🌧️ Heavy rain likely' : '🌧️ Heavy rain possible', `${amt} · plan indoor or a backup.`, '#101d38'];
+  }
   if (x && x.low >= 70) return ['☁️ Soft, flat light', 'Overcast: no hard shadows, even exposure, kind to skin.', '#23262d'];
   const some = x && x.low >= 25 ? ' Clouds may pass.' : '';
   if (a < 6) return ['🔥 Golden light!', 'Warm, low sun and long shadows. Beauty-shot time.' + some, '#3a2508'];
@@ -609,7 +643,7 @@ function wxIcon(x, up) {
 function skyWeather() {
   const x = wxAt(state.date, Math.floor(state.minutes / 60));
   if (!x) return { cloud: 0, rain: 0, snow: false, storm: false, fog: false, x };
-  const rain = isRain(x) ? clamp(0.3 + x.pr / 3, 0.3, 1) : 0;
+  const rain = isRain(x) || maybeDrizzle(x) ? { drizzle: 0.15, light: 0.4, moderate: 0.7, heavy: 1 }[rainKind(x.pr)] : 0;   // a few drops … dense rain
   return { cloud: clamp((0.6 * x.low + 0.4 * x.cc) / 100, 0, 1), rain, snow: isSnow(x), storm: x.code >= 95, fog: x.code === 45 || x.code === 48, x };
 }
 function sliderGradient() {
@@ -667,6 +701,8 @@ function update() {
   $('quality').textContent = L[2]; $('lightIco').textContent = L[1];
   if (blocked) { $('shadow').textContent = '—'; $('shadowBar').setAttribute('width', 0); }
   const mo = renderMoon(d); renderGlow();
+  const vNow = verdictAt(state.date, sel);
+  if (x && vNow) x.rainAgree = vNow.allRain;   // do all three forecasts have rain this hour?
   let [title, sub, bg] = score(a, x, blocked);
   if (a < -6 && mo.now.a > 5) sub = mo.ph.frac > 0.6 ? `${mo.ph.p[0]} Bright moonlight from the ${compass(mo.now.b)}. Try a moonlit shot.` : `${mo.ph.p[0]} A thin moon is up in the ${compass(mo.now.b)}.`;
   else if (a < -6 && mo.ph.frac < 0.15) sub = '🌑 Dark, moonless sky: good for stars.';
@@ -681,11 +717,11 @@ function update() {
   $('heroTitle').textContent = title; $('heroSub').textContent = sub;
   $('hero').style.setProperty('--tint', bg);
   const cc = $('heroConf');
-  if (!conf || a < -6) cc.classList.add('hidden');
-  else { cc.classList.remove('hidden'); cc.className = 'confchip ' + (conf.agree === conf.total && conf.total > 1 ? 'c3' : conf.agree >= 2 ? 'c2' : 'c1'); cc.textContent = conf.agree === conf.total && conf.total > 1 ? '✓ Forecasts agree' : conf.agree >= 2 ? `${conf.agree} of ${conf.total} forecasts agree` : 'Forecasts disagree: have a backup'; }
+  if (!conf || !vNow || a < -6) cc.classList.add('hidden');
+  else { cc.classList.remove('hidden'); cc.className = 'confchip ' + vNow.level; cc.textContent = vNow.text; cc.title = vNow.ms.map(m => `${m.name}: ${m.say}${vNow.wet ? ` (${fmtMm(m.mm)} mm${m.pp != null ? ', ' + m.pp + '%' : ''})` : ''}`).join('\n'); }
   $('bTemp').textContent = x ? `${wxIcon(x, a > 0)} ${Math.round(x.temp)}°` : '–';
   $('bMoon').classList.toggle('hidden', mo.now.a <= 0); $('bMoon').textContent = `${mo.ph.p[0]} ${Math.round(mo.ph.frac * 100)}%`;
-  $('bRain').classList.toggle('hidden', !x || x.pp < 20); if (x) $('bRain').textContent = `💧 ${x.pp}%`;
+  $('bRain').classList.toggle('hidden', !x || (x.pp < 20 && x.pr < 0.1)); if (x) $('bRain').textContent = `💧 ${x.pp}%` + (x.pr >= 0.1 ? ` · ${fmtMm(x.pr)} mm` : '');
 
   // the animated sky + weather over the map / 3D
   const w = skyWeather(), s0 = dayStartUTC(), alts = [];
@@ -740,11 +776,12 @@ function renderHours(t, sel) {
     hoursKey = key; fresh = true; box.innerHTML = '';
     if (!wxAt(state.date, 12)) { box.innerHTML = '<div class="note nofc">No forecast this far ahead (about 16 days is the limit).</div>'; return; }
     for (let h = 0; h < 24; h++) {
-      const w = wxAt(state.date, h), mid = new Date(dayStartUTC() + (h * 60 + 30) * 60000), up = mid > t.sunrise && mid < t.sunset, c = confidenceAt(state.date, h);
+      const w = wxAt(state.date, h), mid = new Date(dayStartUTC() + (h * 60 + 30) * 60000), up = mid > t.sunrise && mid < t.sunset, v = verdictAt(state.date, h);
       const el = document.createElement('button'); el.className = 'hr' + (up ? ' up' : '');
-      const dot = c ? (c.agree === c.total && c.total > 1 ? 'c3' : c.agree >= 2 ? 'c2' : 'c1') : '';
-      el.innerHTML = `<span class="t">${pad2(h)}</span><span class="i">${wxIcon(w, up)}</span><span class="tp">${w ? Math.round(w.temp) + '°' : ''}</span><span class="r">${w && w.pp >= 20 ? '💧' + w.pp + '%' : ''}</span><i class="dot ${dot}"></i>`;
-      el.title = w ? `${fmtMin(h * 60)} · ${wxText(w.code)} · clouds ${w.cc}% · rain ${w.pp}% · ${w.temp}°C` : '';
+      const dot = v ? v.level : '', k = w ? rainKind(w.pr) : 'none', showRain = w && (w.pp >= 20 || w.pr >= 0.1);
+      const amount = !showRain ? '' : k === 'none' ? '<span class="ra dry">dry</span>' : `<span class="ra">${dropsIcon(k)}${fmtMm(w.pr)} mm</span>`;
+      el.innerHTML = `<span class="t">${pad2(h)}</span><span class="i">${wxIcon(w, up)}</span><span class="tp">${w ? Math.round(w.temp) + '°' : ''}</span><span class="r">${showRain ? '💧' + w.pp + '%' : ''}</span>${amount || '<span class="ra"></span>'}<i class="dot ${dot}"></i>`;
+      el.title = w ? `${fmtMin(h * 60)} · ${wxText(w.code)} · clouds ${w.cc}% · rain ${w.pp}% · about ${fmtMm(w.pr)} mm (${RAIN_WORD[k]})${v ? ' · ' + v.text.replace('✓ ', '') : ''} · ${w.temp}°C` : '';
       el.onclick = () => jumpTo(h * 60 + 30);
       box.appendChild(el);
     }
@@ -1263,8 +1300,8 @@ $('installBtn').onclick = async () => { if (!installEvt) return; installEvt.prom
 $('installClose').onclick = () => { $('installBar').classList.add('hidden'); try { localStorage.setItem('sunscout-install-dismissed', '1'); } catch { /* no storage */ } };
 // keep the installed app up to date: look for a new version on open and whenever you come back to it,
 // and reload once when it arrives (only if an older version was running)
-const APP_VERSION = '2.6';
-const WHATS_NEW = ['New 🔗 Share: send your crew a link to the exact spot, date and time', 'Tap 📍 Find me to fly straight to where you are', 'Without your location, the app opens on a satellite view of India'];
+const APP_VERSION = '2.7';
+const WHATS_NEW = ['Rain now shows how much, not just the chance: drizzle, light shower, moderate or heavy', 'See what each forecast says, like "2 say light shower · 1 says dry"', 'Hour by hour shows the chance and the amount in mm'];
 let swReg = null;
 function showUpdate() {
   const box = $('updateBar'); if (!box || !box.classList.contains('hidden')) return;
